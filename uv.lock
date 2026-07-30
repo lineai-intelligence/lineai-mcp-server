@@ -140,7 +140,7 @@ requires-dist = [
     { name = "debugpy", specifier = ">=1.8.12" },
     { name = "httpcore", git = "https://github.com/encode/httpcore.git" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.4.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.4.0,<2" },
     { name = "pip-licenses", specifier = ">=5.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "tenacity", specifier = ">=9.0.0" },
