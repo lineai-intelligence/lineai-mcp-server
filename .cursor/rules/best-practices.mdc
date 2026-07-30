@@ -6,7 +6,5 @@ alwaysApply: false
 - Use semantic search before grep for broader context
 - Maintain proper error handling and logging
 - Keep code changes atomic and focused
-- **NEW**: For DevOps tools, provide structured JSON data for AI file modification
-- **NEW**: Include specific file paths, line numbers, and exact code modifications
-- **NEW**: Generate platform-specific CI/CD configurations (Jenkins, GitHub Actions, Azure DevOps, GitLab)
-- **NEW**: Always include setup instructions and validation checks for DevOps integrations
+- Prefer graph tools (`codelogic-graph-*`) for discovery when available; fall back to method/database impact tools
+- Return results as clear markdown for AI assistants

@@ -9,8 +9,3 @@ alwaysApply: false
 - `CODELOGIC_WORKSPACE_NAME`: Workspace name
 - `CODELOGIC_DEBUG_MODE`: Enable debug logging
 - `CODELOGIC_TEST_MODE`: Used by test framework
-- **NEW**: DevOps CI/CD Integration Variables:
-  - `CODELOGIC_HOST`: CodeLogic server host for Docker agents
-  - `AGENT_UUID`: CodeLogic agent UUID for authentication
-  - `AGENT_PASSWORD`: CodeLogic agent password for authentication
-  - `SCAN_SPACE_NAME`: Target scan space for CodeLogic scans

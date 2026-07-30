@@ -5,7 +5,5 @@ alwaysApply: false
 ---
 - This repository contains a Model Context Protocol (MCP) server that integrates with CodeLogic's knowledge graph APIs
 - It enables AI programming assistants to access dependency data from CodeLogic to analyze code and database impacts
-- **NEW**: Provides DevOps CI/CD integration capabilities for CodeLogic scanning in Jenkins, GitHub Actions, Azure DevOps, and GitLab CI
-- **NEW**: Generates structured data for AI models to directly modify CI/CD files and implement CodeLogic scanning
-- The core package is in src/codelogic_mcp_server/ with server.py, handlers.py, and utils.py
-- **DevOps Tools**: codelogic-docker-agent, codelogic-build-info, codelogic-pipeline-helper for CI/CD integration
+- Tools: `codelogic-method-impact`, `codelogic-database-impact`, and `codelogic-graph-*` (capabilities, search, impact, path-explain, validate-change-scope, owners)
+- The core package is in `src/codelogic_mcp_server/` with `server.py`, `handlers/` (package), and `utils.py`

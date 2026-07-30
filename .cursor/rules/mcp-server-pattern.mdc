@@ -18,10 +18,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
     # Handle tool execution
 ```
 
-- New tools should be added to handle_list_tools() with descriptive names (prefix: `codelogic-`)
-- Tool handlers should be implemented in handle_call_tool()
+- New tools should be added to `handlers/__init__.py` `handle_list_tools()` with descriptive names (prefix: `codelogic-`)
+- Tool handlers should be routed in `handle_call_tool()`
 - Create handler functions with proper error handling
 - Return results as markdown-formatted text
-- **NEW**: For DevOps tools, return structured JSON data for AI file modification
-- **NEW**: Include helper functions for generating platform-specific CI/CD configurations
-- **NEW**: Use structured output patterns for file modifications with specific line numbers and content

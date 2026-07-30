@@ -6,24 +6,13 @@ An [MCP Server](https://modelcontextprotocol.io/introduction) to utilize Codelog
 
 ### Tools
 
-The server implements **eleven** tools: five original tools plus six **graph** tools backed by the CodeLogic graph HTTP API.
+The server implements **eight** tools: two impact tools plus six **graph** tools backed by the CodeLogic graph HTTP API.
 
 #### Code Analysis Tools
 - **codelogic-method-impact**: Pulls an impact assessment from the CodeLogic server's APIs for your code.
   - Takes the given "method" that you're working on and its associated "class".
 - **codelogic-database-impact**: Analyzes impacts between code and database entities.
   - Takes the database entity type (column, table, or view) and its name.
-
-#### DevOps & CI/CD Integration Tools
-- **codelogic-docker-agent**: Generates Docker agent configurations for CodeLogic scanning in CI/CD pipelines.
-  - Supports .NET, Java, SQL, and TypeScript agents
-  - Generates configurations for Jenkins, GitHub Actions, Azure DevOps, and GitLab CI
-- **codelogic-build-info**: Generates build information and send commands for CodeLogic integration.
-  - Supports Git information, build logs, and metadata collection
-  - Provides both Docker and standalone usage examples
-- **codelogic-pipeline-helper**: Generates complete CI/CD pipeline configurations for CodeLogic integration.
-  - Creates comprehensive pipeline configurations with best practices
-  - Includes error handling, notifications, and scan space management strategies
 
 #### Graph API tools
 
@@ -221,41 +210,6 @@ To configure the CodeLogic MCP server in Cursor:
 
 The CodeLogic MCP server tools will now be available in your Cursor workspace.
 
-## DevOps Integration
-
-The CodeLogic MCP Server now includes powerful DevOps capabilities for integrating CodeLogic scanning into your CI/CD pipelines. These tools help DevOps teams:
-
-### Docker Agent Integration
-- Generate Docker run commands for CodeLogic agents
-- Create platform-specific configurations (Jenkins, GitHub Actions, Azure DevOps, GitLab CI)
-- Set up proper environment variables and volume mounts
-- Include build information collection
-
-### Build Information Management
-- Send Git information, build logs, and metadata to CodeLogic servers
-- Support multiple CI/CD platforms with platform-specific variables
-- Handle log file management and rotation
-- Provide both Docker and standalone usage options
-
-### Complete Pipeline Configuration
-- Generate end-to-end CI/CD pipeline configurations
-- Include error handling, notifications, and monitoring
-- Support different scan space management strategies
-- Follow DevOps best practices for security and performance
-
-### Example Usage
-
-```bash
-# Generate Docker agent configuration for .NET
-codelogic-docker-agent --agent-type=dotnet --scan-path=/app --application-name=MyApp --ci-platform=jenkins
-
-# Set up build information sending
-codelogic-build-info --build-type=all --output-format=docker --ci-platform=github-actions
-
-# Create complete pipeline configuration
-codelogic-pipeline-helper --ci-platform=jenkins --agent-type=dotnet --scan-triggers=main,develop
-```
-
 ## AI Assistant Instructions/Rules
 
 To help the AI assistant use the CodeLogic tools effectively, you can add the following instructions/rules to your client's configuration. We recommend customizing these instructions to align with your team's specific coding standards, best practices, and workflow requirements:
@@ -279,16 +233,10 @@ When modifying SQL code or database entities:
 - Always use codelogic-database-impact to analyze potential impacts
 - Highlight impact results for the modified database entities
 
-For DevOps and CI/CD integration:
-- Use codelogic-docker-agent to generate Docker agent configurations
-- Use codelogic-build-info to set up build information sending
-- Use codelogic-pipeline-helper to create complete CI/CD pipeline configurations
-- Support Jenkins, GitHub Actions, Azure DevOps, and GitLab CI platforms
-
 To use the CodeLogic tools effectively:
 - For code impacts: Ask about specific methods or functions
 - For database relationships: Ask about tables, views, or columns
-- For DevOps: Ask about CI/CD integration, Docker agents, or build information
+- For graph discovery: Prefer codelogic-graph-* tools when available
 - Review the impact results before making changes
 - Consider both direct and indirect impacts
 ```
@@ -310,16 +258,10 @@ When modifying SQL code or database entities:
 - Always use codelogic-database-impact to analyze potential impacts
 - Highlight impact results for the modified database entities
 
-For DevOps and CI/CD integration:
-- Use codelogic-docker-agent to generate Docker agent configurations
-- Use codelogic-build-info to set up build information sending
-- Use codelogic-pipeline-helper to create complete CI/CD pipeline configurations
-- Support Jenkins, GitHub Actions, Azure DevOps, and GitLab CI platforms
-
 To use the CodeLogic tools effectively:
 - For code impacts: Ask about specific methods or functions
 - For database relationships: Ask about tables, views, or columns
-- For DevOps: Ask about CI/CD integration, Docker agents, or build information
+- For graph discovery: Prefer codelogic-graph-* tools when available
 - Review the impact results before making changes
 - Consider both direct and indirect impacts
 ```
@@ -339,16 +281,10 @@ When modifying SQL code or database entities:
 - Always use codelogic-database-impact to analyze potential impacts
 - Highlight impact results for the modified database entities
 
-For DevOps and CI/CD integration:
-- Use codelogic-docker-agent to generate Docker agent configurations
-- Use codelogic-build-info to set up build information sending
-- Use codelogic-pipeline-helper to create complete CI/CD pipeline configurations
-- Support Jenkins, GitHub Actions, Azure DevOps, and GitLab CI platforms
-
 To use the CodeLogic tools effectively:
 - For code impacts: Ask about specific methods or functions
 - For database relationships: Ask about tables, views, or columns
-- For DevOps: Ask about CI/CD integration, Docker agents, or build information
+- For graph discovery: Prefer codelogic-graph-* tools when available
 - Review the impact results before making changes
 - Consider both direct and indirect impacts
 ```

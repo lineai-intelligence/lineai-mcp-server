@@ -21,13 +21,12 @@ This document is about **enhancements** to the **same** MCP server (`codelogic-m
 | --- | --- |
 | **`codelogic-method-impact`** | Impact analysis for a **method** in a **class** via the **CodeLogic server** HTTP API (`CODELOGIC_WORKSPACE_NAME`, credentials in env). |
 | **`codelogic-database-impact`** | Impact between **code and database** entities (table / view / column) via the same server API. |
-| **`codelogic-ci`** | **CI/CD** helpers (scan agents, pipelines, build-info)—**not** graph exploration; stays independent of graph tooling. |
 
 ### How graph tools relate
 
 - The proposed **`codelogic-graph-*`** tools **extend** the server’s surface area: deeper **graph discovery**, **bounded** traversals, **manifest-driven** behavior, and alignment with an **`/ai-retrieval`**-style HTTP API as that API is built out.
 - They **complement** `codelogic-method-impact` and `codelogic-database-impact` where those stay the thin, stable wrappers around existing CodeLogic endpoints; over time, graph tools may **share backend capabilities** (same graph service) while keeping **MCP contracts** distinct from the web UI.
-- **`codelogic-ci`** remains unchanged in purpose; agents doing graph work should still use CI tools only when editing pipelines or scan setup.
+- CI / build-feedback pipeline patching for library upgrades is owned by neo4cape ticket-implementation prompts (`PromptConstants`), not by MCP CI tools.
 
 ## API Calls
 

@@ -14,7 +14,6 @@ import mcp.types as types
 from ..server import server
 from .method_impact import handle_method_impact
 from .database_impact import handle_database_impact
-from .ci import handle_ci
 from .graph_tools import GRAPH_TOOL_DISPATCH, handle_graph_tool
 
 
@@ -64,29 +63,6 @@ async def handle_list_tools() -> list[types.Tool]:
                     "table_or_view": {"type": "string", "description": "Name of the table or view containing the column (required for columns only)"},
                 },
                 "required": ["entity_type", "name"],
-            },
-        ),
-        types.Tool(
-            name="codelogic-ci",
-            description="Unified CodeLogic CI integration: generate scan (analyze) and build-info steps for CI/CD.\n"
-                        "Provides AI-actionable file modifications, templates, and best practices for Jenkins, GitHub Actions, Azure DevOps, and GitLab.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "agent_type": {
-                        "type": "string",
-                        "description": "Type of CodeLogic agent to configure",
-                        "enum": ["dotnet", "java", "sql", "javascript"]
-                    },
-                    "scan_path": {"type": "string", "description": "Directory path to be scanned (e.g., /path/to/your/code)"},
-                    "application_name": {"type": "string", "description": "Name of the application being scanned"},
-                    "ci_platform": {
-                        "type": "string",
-                        "description": "CI/CD platform for which to generate configuration",
-                        "enum": ["jenkins", "github-actions", "azure-devops", "gitlab", "generic"]
-                    }
-                },
-                "required": ["agent_type", "scan_path", "application_name"],
             },
         ),
         types.Tool(
@@ -204,8 +180,6 @@ async def handle_call_tool(
             return await handle_method_impact(arguments)
         elif name == "codelogic-database-impact":
             return await handle_database_impact(arguments)
-        elif name == "codelogic-ci":
-            return await handle_ci(arguments)
         elif name in GRAPH_TOOL_DISPATCH:
             return handle_graph_tool(name, arguments)
         else:
