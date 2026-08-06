@@ -1,18 +1,18 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-End-to-end integration tests for ``codelogic-graph-*`` MCP tools against a real CodeLogic host.
+End-to-end integration tests for ``lineai-graph-*`` MCP tools against a real Lineai host.
 
 Prerequisites (same as ``integration_test_all.py``):
 
-- ``CODELOGIC_SERVER_HOST``, ``CODELOGIC_USERNAME``, ``CODELOGIC_PASSWORD``, ``CODELOGIC_WORKSPACE_NAME``
+- ``LINEAI_SERVER_HOST``, ``LINEAI_USERNAME``, ``LINEAI_PASSWORD``, ``LINEAI_WORKSPACE_NAME``
 - Optional: ``.env`` / ``test/.env.test`` loaded by ``load_test_config()``
 
 The server must expose ``POST/GET .../codelogic/server/ai-retrieval/graph/*``. If graph routes
-return 404, tests **skip** unless ``CODELOGIC_GRAPH_E2E_REQUIRED=1`` is set (then they **fail**).
+return 404, tests **skip** unless ``LINEAI_GRAPH_E2E_REQUIRED=1`` is set (then they **fail**).
 
 Run::
 
@@ -53,7 +53,7 @@ def _extract_json_from_mcp_markdown(text: str) -> dict:
 
 
 def _is_server_reachable(config: dict) -> bool:
-    if not config.get("CODELOGIC_SERVER_HOST") or not config.get("CODELOGIC_USERNAME") or not config.get("CODELOGIC_PASSWORD"):
+    if not config.get("LINEAI_SERVER_HOST") or not config.get("LINEAI_USERNAME") or not config.get("LINEAI_PASSWORD"):
         return False
     try:
         *_, authenticate = setup_test_environment(config)
@@ -64,18 +64,18 @@ def _is_server_reachable(config: dict) -> bool:
 
 
 class TestGraphMcpE2E(TestCase):
-    """E2E tests: MCP ``handle_call_tool`` → CodeLogic graph HTTP API."""
+    """E2E tests: MCP ``handle_call_tool`` → Lineai graph HTTP API."""
 
     @classmethod
     def setUpClass(cls):
         cls.config = load_test_config()
         cls._skip_reason = None
-        if cls.config.get("CODELOGIC_USERNAME") and cls.config.get("CODELOGIC_PASSWORD") and not _is_server_reachable(cls.config):
-            cls._skip_reason = "CodeLogic server not reachable"
+        if cls.config.get("LINEAI_USERNAME") and cls.config.get("LINEAI_PASSWORD") and not _is_server_reachable(cls.config):
+            cls._skip_reason = "Lineai server not reachable"
 
     def setUp(self):
         super().setUp()
-        if not self.config.get("CODELOGIC_USERNAME") or not self.config.get("CODELOGIC_PASSWORD"):
+        if not self.config.get("LINEAI_USERNAME") or not self.config.get("LINEAI_PASSWORD"):
             self.skipTest("Skipping graph E2E: no credentials in environment")
         if getattr(self.__class__, "_skip_reason", None):
             self.skipTest(self.__class__._skip_reason)
@@ -94,8 +94,8 @@ class TestGraphMcpE2E(TestCase):
 
     def _require_graph_or_skip(self, result_text: str) -> dict:
         if _graph_api_not_available(result_text):
-            msg = "Graph API not deployed on this CodeLogic host (404)"
-            if os.environ.get("CODELOGIC_GRAPH_E2E_REQUIRED", "").strip() == "1":
+            msg = "Graph API not deployed on this Lineai host (404)"
+            if os.environ.get("LINEAI_GRAPH_E2E_REQUIRED", "").strip() == "1":
                 self.fail(msg)
             self.skipTest(msg)
         return _extract_json_from_mcp_markdown(result_text)
@@ -105,7 +105,7 @@ class TestGraphMcpE2E(TestCase):
 
     def test_graph_capabilities(self):
         async def run():
-            return await self._call_tool("codelogic-graph-capabilities", {})
+            return await self._call_tool("lineai-graph-capabilities", {})
 
         out = asyncio.run(run())
         self.assertIsInstance(out, list)
@@ -119,7 +119,7 @@ class TestGraphMcpE2E(TestCase):
     def test_graph_search_and_downstream(self):
         async def search():
             return await self._call_tool(
-                "codelogic-graph-search",
+                "lineai-graph-search",
                 {"query": "load", "limit": 15},
             )
 
@@ -135,7 +135,7 @@ class TestGraphMcpE2E(TestCase):
 
         async def impact():
             return await self._call_tool(
-                "codelogic-graph-impact",
+                "lineai-graph-impact",
                 {"seed_node_ids": [node_id]},
             )
 
@@ -144,7 +144,7 @@ class TestGraphMcpE2E(TestCase):
 
         async def path():
             return await self._call_tool(
-                "codelogic-graph-path-explain",
+                "lineai-graph-path-explain",
                 {"from_node_id": node_id, "to_node_id": node_id, "max_depth": 5},
             )
 
@@ -153,7 +153,7 @@ class TestGraphMcpE2E(TestCase):
 
         async def validate():
             return await self._call_tool(
-                "codelogic-graph-validate-change-scope",
+                "lineai-graph-validate-change-scope",
                 {
                     "seed_node_ids": [node_id],
                     "proposed_change_summary": "E2E graph MCP validate-change-scope",
@@ -164,7 +164,7 @@ class TestGraphMcpE2E(TestCase):
         self._require_graph_or_skip(v_out[0].text)
 
         async def owners():
-            return await self._call_tool("codelogic-graph-owners", {"node_id": node_id})
+            return await self._call_tool("lineai-graph-owners", {"node_id": node_id})
 
         o_out = asyncio.run(owners())
         self._require_graph_or_skip(o_out[0].text)

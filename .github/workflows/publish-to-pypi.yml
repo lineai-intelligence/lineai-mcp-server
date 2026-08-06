@@ -90,7 +90,7 @@ jobs:
         payload: |
           {
             "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
-            "text": "New Release Published to PyPI: codelogic-mcp-server v${{ steps.get_version.outputs.version }}",
+            "text": "New Release Published to PyPI: lineai-mcp-server v${{ steps.get_version.outputs.version }}",
             "blocks": [
               {
                 "type": "section",
@@ -98,11 +98,11 @@ jobs:
               },
               {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Package:* codelogic-mcp-server v${{ steps.get_version.outputs.version }}\n*Published by:* ${{ github.actor }}"}
+                "text": {"type": "mrkdwn", "text": "*Package:* lineai-mcp-server v${{ steps.get_version.outputs.version }}\n*Published by:* ${{ github.actor }}"}
               },
               {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": ":link: <https://pypi.org/project/codelogic-mcp-server/${{ steps.get_version.outputs.version }}|View on PyPI>"}
+                "text": {"type": "mrkdwn", "text": ":link: <https://pypi.org/project/lineai-mcp-server/${{ steps.get_version.outputs.version }}|View on PyPI>"}
               }
             ]
           }

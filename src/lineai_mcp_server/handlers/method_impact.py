@@ -1,10 +1,10 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Handler for the codelogic-method-impact tool.
+Handler for the lineai-method-impact tool.
 """
 
 import json
@@ -17,7 +17,7 @@ from ..utils import extract_nodes, extract_relationships, get_mv_id, get_method_
 
 
 async def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
-    """Handle the codelogic-method-impact tool for method/function analysis"""
+    """Handle the lineai-method-impact tool for method/function analysis"""
     if not arguments:
         sys.stderr.write("Missing arguments\n")
         raise ValueError("Missing arguments")
@@ -46,49 +46,49 @@ async def handle_method_impact(arguments: dict | None) -> list[types.TextContent
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
 ## Error
-No method nodes matched this short name in the current workspace materialized view (HTTP 404 NOT_FOUND from the CodeLogic search API).
+No method nodes matched this short name in the current workspace materialized view (HTTP 404 NOT_FOUND from the Lineai search API).
 
 ## Recommendations:
 1. Confirm the method exists in the indexed codebase and spelling matches the symbol short name.
-2. Ensure `CODELOGIC_WORKSPACE_NAME` points at the workspace that contains this code.
-3. If the method was added recently, the view may need to be refreshed on the CodeLogic server.
+2. Ensure `LINEAI_WORKSPACE_NAME` points at the workspace that contains this code.
+3. If the method was added recently, the view may need to be refreshed on the Lineai server.
 """
         elif method_lookup_error == "timeout":
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
 ## Error
-The shortname search request timed out after {os.getenv('CODELOGIC_REQUEST_TIMEOUT', '120.0')}s (client timeout).
+The shortname search request timed out after {os.getenv('LINEAI_REQUEST_TIMEOUT', '120.0')}s (client timeout).
 
 ## Recommendations:
-1. Retry when the server is less busy, or raise `CODELOGIC_REQUEST_TIMEOUT` if appropriate.
-2. Verify network access to: {os.getenv('CODELOGIC_SERVER_HOST')}
+1. Retry when the server is less busy, or raise `LINEAI_REQUEST_TIMEOUT` if appropriate.
+2. Verify network access to: {os.getenv('LINEAI_SERVER_HOST')}
 """
         elif method_lookup_error == "gateway_timeout":
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
 ## Error
-The CodeLogic API returned **504 Gateway Timeout** while searching for method nodes (upstream did not respond in time).
+The Lineai API returned **504 Gateway Timeout** while searching for method nodes (upstream did not respond in time).
 
 ## Recommendations:
 1. Try again in a few minutes; transient load or cold queries often cause this.
-2. If Swagger returns 404 quickly for the same method and workspace, report the discrepancy to CodeLogic — the authenticated or MCP request path may differ from browser/Swagger.
-3. Server: {os.getenv('CODELOGIC_SERVER_HOST')}
+2. If Swagger returns 404 quickly for the same method and workspace, report the discrepancy to Lineai — the authenticated or MCP request path may differ from browser/Swagger.
+3. Server: {os.getenv('LINEAI_SERVER_HOST')}
 """
         else:
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
 ## Error
-The request to retrieve method information from the CodeLogic server failed (timeout, HTTP error, or empty result).
+The request to retrieve method information from the Lineai server failed (timeout, HTTP error, or empty result).
 
 ## Possible causes:
 1. The method name does not exist in the indexed codebase
-2. The CodeLogic server is under heavy load or returned an error
-3. Network issues between the MCP server and CodeLogic
+2. The Lineai server is under heavy load or returned an error
+3. Network issues between the MCP server and Lineai
 
 ## Recommendations:
 1. Check MCP stderr logs for the exact HTTP status and message
 2. Verify the method name and workspace configuration
-3. Server: {os.getenv('CODELOGIC_SERVER_HOST')}
+3. Server: {os.getenv('LINEAI_SERVER_HOST')}
 """
         return [
             types.TextContent(
@@ -155,8 +155,8 @@ The request to retrieve method information from the CodeLogic server failed (tim
     instruction_count = target_node['properties'].get('statistics.instructionCount', 'N/A') if target_node else 'N/A'
 
     # Extract code owners and reviewers
-    code_owners = target_node['properties'].get('codelogic.owners', []) if target_node else []
-    code_reviewers = target_node['properties'].get('codelogic.reviewers', []) if target_node else []
+    code_owners = target_node['properties'].get('lineai.owners', []) if target_node else []
+    code_reviewers = target_node['properties'].get('lineai.reviewers', []) if target_node else []
 
     # If target node doesn't have owners/reviewers, try to find them from the class or file node
     if not code_owners or not code_reviewers:
@@ -166,9 +166,9 @@ The request to retrieve method information from the CodeLogic server failed (tim
 
         if class_node:
             if not code_owners:
-                code_owners = class_node['properties'].get('codelogic.owners', [])
+                code_owners = class_node['properties'].get('lineai.owners', [])
             if not code_reviewers:
-                code_reviewers = class_node['properties'].get('codelogic.reviewers', [])
+                code_reviewers = class_node['properties'].get('lineai.reviewers', [])
 
     # Identify dependents (systems that depend on this method)
     dependents = []

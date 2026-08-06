@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.CodeLogicIncEngineering/codelogic-mcp-server",
-  "description": "An MCP Server to utilize Codelogic's rich software dependency data in your AI programming assistant.",
+  "name": "io.github.lineai-intelligence/lineai-mcp-server",
+  "description": "An MCP Server to utilize Lineai's rich software dependency data in your AI programming assistant.",
   "repository": {
-    "url": "https://github.com/CodeLogicIncEngineering/codelogic-mcp-server",
+    "url": "https://github.com/lineai-intelligence/lineai-mcp-server",
     "source": "github"
   },
   "version": "1.3.0",
@@ -11,46 +11,46 @@
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
-      "identifier": "codelogic-mcp-server",
+      "identifier": "lineai-mcp-server",
       "version": "1.3.0",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
-          "description": "url to the CodeLogic server e.g. https://myco.app.codelogic.com",
+          "description": "url to the Lineai server e.g. https://myco.app.lineai.net",
           "isRequired": true,
           "format": "string",
           "isSecret": false,
-          "name": "CODELOGIC_SERVER_HOST"
+          "name": "LINEAI_SERVER_HOST"
         },
         {
-          "description": "CodeLogic server username",
+          "description": "Lineai server username",
           "isRequired": true,
           "format": "string",
           "isSecret": false,
-          "name": "CODELOGIC_USERNAME"
+          "name": "LINEAI_USERNAME"
         },
         {
-          "description": "CodeLogic server password",
+          "description": "Lineai server password",
           "isRequired": true,
           "format": "string",
           "isSecret": true,
-          "name": "CODELOGIC_PASSWORD"
+          "name": "LINEAI_PASSWORD"
         },
         {
           "description": "the workspace name that your code is scanned into",
           "isRequired": true,
           "format": "string",
           "isSecret": false,
-          "name": "CODELOGIC_WORKSPACE_NAME"
+          "name": "LINEAI_WORKSPACE_NAME"
         },
         {
           "description": "When enabled, additional debug files such as timing_log.txt and impact_data*.json will be generated. Defaults to false",
           "isRequired": false,
           "format": "string",
           "isSecret": false,
-          "name": "CODELOGIC_DEBUG_MODE"
+          "name": "LINEAI_DEBUG_MODE"
         }
       ]
     }

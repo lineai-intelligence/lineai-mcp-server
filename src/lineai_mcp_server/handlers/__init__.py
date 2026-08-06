@@ -1,12 +1,12 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Main handlers module for CodeLogic MCP server.
+Main handlers module for Lineai MCP server.
 
-This module provides the main handler registry and routing for all CodeLogic tools.
+This module provides the main handler registry and routing for all Lineai tools.
 """
 
 import sys
@@ -25,9 +25,9 @@ async def handle_list_tools() -> list[types.Tool]:
     """
     return [
         types.Tool(
-            name="codelogic-method-impact",
+            name="lineai-method-impact",
             description="Analyze impacts of modifying a specific method within a given class or type.\n"
-                        "Uses CODELOGIC_WORKSPACE_NAME environment variable to determine the target workspace.\n"
+                        "Uses LINEAI_WORKSPACE_NAME environment variable to determine the target workspace.\n"
                         "Recommended workflow:\n"
                         "1. Use this tool before implementing code changes\n"
                         "2. Run the tool against methods or functions that are being modified\n"
@@ -43,9 +43,9 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-database-impact",
+            name="lineai-database-impact",
             description="Analyze impacts between code and database entities.\n"
-                        "Uses CODELOGIC_WORKSPACE_NAME environment variable to determine the target workspace.\n"
+                        "Uses LINEAI_WORKSPACE_NAME environment variable to determine the target workspace.\n"
                         "Recommended workflow:\n"
                         "1. Use this tool before implementing code or database changes\n"
                         "2. Search for the relevant database entity\n"
@@ -66,10 +66,10 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-capabilities",
-            description="Fetch graph API capabilities/manifest from the CodeLogic server (GET). "
+            name="lineai-graph-capabilities",
+            description="Fetch graph API capabilities/manifest from the Lineai server (GET). "
                         "Returns label and relationship metadata when the graph tier is deployed; "
-                        "otherwise explains missing routes. Uses CODELOGIC_WORKSPACE_NAME for MV id unless "
+                        "otherwise explains missing routes. Uses LINEAI_WORKSPACE_NAME for MV id unless "
                         "`materialized_view_id` is set.",
             inputSchema={
                 "type": "object",
@@ -83,8 +83,8 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-search",
-            description="Search the CodeLogic knowledge graph (curated HTTP API). "
+            name="lineai-graph-search",
+            description="Search the Lineai knowledge graph (curated HTTP API). "
                         "Provide `query` or `identity_prefix`; optional `scan_space`, `materialized_view_id`, `limit`. "
                         "Requires server route POST .../ai-retrieval/graph/search.",
             inputSchema={
@@ -101,7 +101,7 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-impact",
+            name="lineai-graph-impact",
             description="Bounded graph impact from seed node ids (curated HTTP API). "
                         "Optional `direction` (upstream|downstream|both), `depth`, `scan_space`, `materialized_view_id`.",
             inputSchema={
@@ -121,7 +121,7 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-path-explain",
+            name="lineai-graph-path-explain",
             description="Explain bounded paths between two graph nodes (curated HTTP API). "
                         "Requires `from_node_id`, `to_node_id`; optional `max_depth`, `scan_space`, `materialized_view_id`.",
             inputSchema={
@@ -137,7 +137,7 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-validate-change-scope",
+            name="lineai-graph-validate-change-scope",
             description="Validate whether a proposed change scope is safe given seed graph nodes (curated HTTP API).",
             inputSchema={
                 "type": "object",
@@ -151,7 +151,7 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
-            name="codelogic-graph-owners",
+            name="lineai-graph-owners",
             description="Look up owners/reviewers for a graph node (curated HTTP API). "
                         "Provide `node_id` or `identity_prefix`.",
             inputSchema={
@@ -176,9 +176,9 @@ async def handle_call_tool(
     Tools can modify server state and notify clients of changes.
     """
     try:
-        if name == "codelogic-method-impact":
+        if name == "lineai-method-impact":
             return await handle_method_impact(arguments)
-        elif name == "codelogic-database-impact":
+        elif name == "lineai-database-impact":
             return await handle_database_impact(arguments)
         elif name in GRAPH_TOOL_DISPATCH:
             return handle_graph_tool(name, arguments)

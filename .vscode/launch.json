@@ -13,7 +13,7 @@
             "console": "integratedTerminal"
         },
         {
-            "name": "Connect to CodeLogic MCP Server",
+            "name": "Connect to Lineai MCP Server",
             "type": "debugpy",
             "request": "attach",
             "connect": {

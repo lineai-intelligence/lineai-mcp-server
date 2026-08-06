@@ -1,6 +1,6 @@
-# Contributing to codelogic-mcp-server
+# Contributing to lineai-mcp-server
 
-Thank you for your interest in contributing to codelogic-mcp-server! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to lineai-mcp-server! This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 
@@ -10,14 +10,14 @@ Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Reporting Bugs
 
-1. Check if the bug has already been reported in our [Issues](https://github.com/CodeLogicIncEngineering/codelogic-mcp-server/issues)
+1. Check if the bug has already been reported in our [Issues](https://github.com/lineai-intelligence/lineai-mcp-server/issues)
 2. If not, create a new issue using the bug report template
 3. Include detailed steps to reproduce the bug
 4. Include your environment details (OS, Python version, etc.)
 
 ### Suggesting Features
 
-1. Check if the feature has already been suggested in our [Issues](https://github.com/CodeLogicIncEngineering/codelogic-mcp-server/issues)
+1. Check if the feature has already been suggested in our [Issues](https://github.com/lineai-intelligence/lineai-mcp-server/issues)
 2. If not, create a new issue using the feature request template
 3. Clearly describe the feature and its benefits
 

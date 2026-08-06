@@ -1,10 +1,10 @@
 ---
-description: Best practices for working with the CodeLogic MCP Server codebase
+description: Best practices for working with the Lineai MCP Server codebase
 globs: 
 alwaysApply: false
 ---
 - Use semantic search before grep for broader context
 - Maintain proper error handling and logging
 - Keep code changes atomic and focused
-- Prefer graph tools (`codelogic-graph-*`) for discovery when available; fall back to method/database impact tools
+- Prefer graph tools (`lineai-graph-*`) for discovery when available; fall back to method/database impact tools
 - Return results as clear markdown for AI assistants

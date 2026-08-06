@@ -11,8 +11,8 @@ class TestEnvironmentSetup(TestCase):
 
     def test_environment_variables_set(self):
         """Test that environment variables are set correctly."""
-        self.assertEqual(os.environ.get('CODELOGIC_SERVER_HOST'), 'https://example.codelogic.test')
-        self.assertEqual(os.environ.get('CODELOGIC_TEST_MODE'), 'true')
+        self.assertEqual(os.environ.get('LINEAI_SERVER_HOST'), 'https://example.lineai.test')
+        self.assertEqual(os.environ.get('LINEAI_TEST_MODE'), 'true')
 
     def test_basic_unittest_functions(self):
         """Test that basic unittest functions work."""

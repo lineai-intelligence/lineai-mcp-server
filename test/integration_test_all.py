@@ -28,16 +28,16 @@ def load_test_config(env_file=None):
         load_dotenv(os.path.join(project_root, '.env'), override=True)
 
     return {
-        'CODELOGIC_WORKSPACE_NAME': os.getenv('CODELOGIC_WORKSPACE_NAME'),
-        'CODELOGIC_SERVER_HOST': os.getenv('CODELOGIC_SERVER_HOST'),
-        'CODELOGIC_USERNAME': os.getenv('CODELOGIC_USERNAME'),
-        'CODELOGIC_PASSWORD': os.getenv('CODELOGIC_PASSWORD'),
+        'LINEAI_WORKSPACE_NAME': os.getenv('LINEAI_WORKSPACE_NAME'),
+        'LINEAI_SERVER_HOST': os.getenv('LINEAI_SERVER_HOST'),
+        'LINEAI_USERNAME': os.getenv('LINEAI_USERNAME'),
+        'LINEAI_PASSWORD': os.getenv('LINEAI_PASSWORD'),
     }
 
 
 def _is_server_reachable(config):
-    """Return True if the CodeLogic server can be reached (auth or DNS)."""
-    if not config.get('CODELOGIC_SERVER_HOST') or not config.get('CODELOGIC_USERNAME') or not config.get('CODELOGIC_PASSWORD'):
+    """Return True if the Lineai server can be reached (auth or DNS)."""
+    if not config.get('LINEAI_SERVER_HOST') or not config.get('LINEAI_USERNAME') or not config.get('LINEAI_PASSWORD'):
         return False
     try:
         *_, authenticate = setup_test_environment(config)
@@ -60,13 +60,13 @@ class TestHandleCallToolIntegration(TestCase):
         """Set up test configuration from environment variables"""
         cls.config = load_test_config()
         cls._skip_reason = None
-        if cls.config.get('CODELOGIC_USERNAME') and cls.config.get('CODELOGIC_PASSWORD') and not _is_server_reachable(cls.config):
-            cls._skip_reason = "CodeLogic server not reachable"
+        if cls.config.get('LINEAI_USERNAME') and cls.config.get('LINEAI_PASSWORD') and not _is_server_reachable(cls.config):
+            cls._skip_reason = "Lineai server not reachable"
 
     def run_impact_test(self, method_name, class_name, output_file):
         """Helper to run a parameterized impact analysis test"""
         # Skip test if credentials are not provided
-        if not self.config.get('CODELOGIC_USERNAME') or not self.config.get('CODELOGIC_PASSWORD'):
+        if not self.config.get('LINEAI_USERNAME') or not self.config.get('LINEAI_PASSWORD'):
             self.skipTest("Skipping integration test: No credentials provided in environment")
         if getattr(self.__class__, '_skip_reason', None):
             self.skipTest(self.__class__._skip_reason)
@@ -75,7 +75,7 @@ class TestHandleCallToolIntegration(TestCase):
         handle_call_tool, *_ = setup_test_environment(self.config)
 
         async def run_test():
-            result = await handle_call_tool('codelogic-method-impact', {'method': method_name, 'class': class_name})
+            result = await handle_call_tool('lineai-method-impact', {'method': method_name, 'class': class_name})
 
             self.assertIsInstance(result, list)
             self.assertGreater(len(result), 0)
@@ -92,7 +92,7 @@ class TestHandleCallToolIntegration(TestCase):
 
         return asyncio.run(run_test())
 
-    def test_handle_call_tool_codelogic_method_impact_multi_app_java(self):
+    def test_handle_call_tool_lineai_method_impact_multi_app_java(self):
         """Test impact analysis on Java multi-app environment"""
         self.run_impact_test(
             'addPrefix',
@@ -100,7 +100,7 @@ class TestHandleCallToolIntegration(TestCase):
             'impact_analysis_result_multi_app_java.md'
         )
 
-    def test_handle_call_tool_codelogic_method_impact_dotnet(self):
+    def test_handle_call_tool_lineai_method_impact_dotnet(self):
         """Test impact analysis on .NET environment"""
         self.run_impact_test(
             'IsValid',
@@ -118,7 +118,7 @@ class TestUtils(TestCase):
     def setUpClass(cls):
         """Set up test resources that can be shared across test methods."""
         config = load_test_config()
-        if not config.get('CODELOGIC_SERVER_HOST') or not config.get('CODELOGIC_USERNAME') or not config.get('CODELOGIC_PASSWORD'):
+        if not config.get('LINEAI_SERVER_HOST') or not config.get('LINEAI_USERNAME') or not config.get('LINEAI_PASSWORD'):
             cls._server_unreachable = True
             cls.token = None
             cls.mv_name = None
@@ -131,7 +131,7 @@ class TestUtils(TestCase):
         try:
             get_mv_definition_id, get_mv_id_from_def, get_method_nodes, get_impact, authenticate = setup_test_environment(config)[1:6]
             cls.token = authenticate()
-            cls.mv_name = os.getenv('CODELOGIC_WORKSPACE_NAME')
+            cls.mv_name = os.getenv('LINEAI_WORKSPACE_NAME')
             cls.mv_def_id = get_mv_definition_id(cls.mv_name, cls.token)
             cls.mv_id = get_mv_id_from_def(cls.mv_def_id, cls.token)
             cls.nodes, _ = get_method_nodes(cls.mv_id, 'IsValid')
@@ -150,7 +150,7 @@ class TestUtils(TestCase):
     def setUp(self):
         super().setUp()
         if self._server_unreachable:
-            self.skipTest("CodeLogic server not reachable")
+            self.skipTest("Lineai server not reachable")
         # Re-apply integration config so test_get_impact uses real server (TestCase.setUp() had set fake env)
         config = load_test_config()
         for key, value in config.items():
@@ -178,7 +178,7 @@ class TestUtils(TestCase):
             # get_impact(id) is a module function; calling self.get_impact(node_id) would pass (self, node_id)
             impact = self.get_impact.__func__(node_id)
         except (httpx.ConnectError, OSError):
-            self.skipTest("CodeLogic server not reachable")
+            self.skipTest("Lineai server not reachable")
         self.assertIsInstance(impact, str)
 
 

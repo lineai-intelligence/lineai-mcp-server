@@ -1,5 +1,5 @@
 ---
-description: Error handling patterns for the CodeLogic MCP Server
+description: Error handling patterns for the Lineai MCP Server
 globs: "**/*.py"
 alwaysApply: false
 ---

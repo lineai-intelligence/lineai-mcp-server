@@ -1,11 +1,11 @@
 ---
-description: Key environment variables for the CodeLogic MCP Server
+description: Key environment variables for the Lineai MCP Server
 globs: "**/*.py"
 alwaysApply: false
 ---
-- `CODELOGIC_SERVER_HOST`: CodeLogic server URL
-- `CODELOGIC_USERNAME`: Username for authentication
-- `CODELOGIC_PASSWORD`: Password for authentication
-- `CODELOGIC_WORKSPACE_NAME`: Workspace name
-- `CODELOGIC_DEBUG_MODE`: Enable debug logging
-- `CODELOGIC_TEST_MODE`: Used by test framework
+- `LINEAI_SERVER_HOST`: Lineai server URL
+- `LINEAI_USERNAME`: Username for authentication
+- `LINEAI_PASSWORD`: Password for authentication
+- `LINEAI_WORKSPACE_NAME`: Workspace name
+- `LINEAI_DEBUG_MODE`: Enable debug logging
+- `LINEAI_TEST_MODE`: Used by test framework

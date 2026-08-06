@@ -9,8 +9,8 @@ import datetime
 # Get the current year for the copyright
 current_year = datetime.datetime.now().year
 
-# MPL-2.0 License Header with CodeLogic Inc. copyright
-MPL_HEADER = f"""# Copyright (C) {current_year} CodeLogic Inc.
+# MPL-2.0 License Header with Lineai Inc. copyright
+MPL_HEADER = f"""# Copyright (C) {current_year} Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
@@ -22,7 +22,7 @@ def add_license_header(file_path):
         content = f.read()
     
     # Check if header is already present (approximate check)
-    if "Mozilla Public License" in content and "CodeLogic Inc." in content:
+    if "Mozilla Public License" in content and "Lineai Inc." in content:
         print(f"Skipping {file_path} - header appears to be present")
         return
     

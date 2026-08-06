@@ -2,17 +2,17 @@ import json
 import unittest
 import mcp.types as types
 from unittest.mock import AsyncMock, patch
-from codelogic_mcp_server.handlers import handle_call_tool
-from codelogic_mcp_server.utils import extract_relationships
+from lineai_mcp_server.handlers import handle_call_tool
+from lineai_mcp_server.utils import extract_relationships
 
 
 class TestHandleCallTool(unittest.TestCase):
 
-    @patch('codelogic_mcp_server.handlers.server.request_context')
-    @patch('codelogic_mcp_server.handlers.get_mv_id')
-    @patch('codelogic_mcp_server.handlers.get_method_entity')
-    @patch('codelogic_mcp_server.handlers.get_impact')
-    @patch('codelogic_mcp_server.handlers.find_node_by_id')
+    @patch('lineai_mcp_server.handlers.server.request_context')
+    @patch('lineai_mcp_server.handlers.get_mv_id')
+    @patch('lineai_mcp_server.handlers.get_method_entity')
+    @patch('lineai_mcp_server.handlers.get_impact')
+    @patch('lineai_mcp_server.handlers.find_node_by_id')
     async def test_handle_call_tool_method(self, mock_find_node_by_id, mock_get_impact, mock_get_method_entity, mock_get_mv_id, mock_request_context):
         # Setup mocks
         mock_request_context.session.send_log_message = AsyncMock()
@@ -27,7 +27,7 @@ class TestHandleCallTool(unittest.TestCase):
         mock_find_node_by_id.side_effect = lambda nodes, id: next(node for node in nodes if node['id'] == id)
 
         # Call the function
-        result = await handle_call_tool('codelogic-method-impact', {'method': 'method_name'})
+        result = await handle_call_tool('lineai-method-impact', {'method': 'method_name'})
 
         # Assertions
         mock_request_context.session.send_log_message.assert_any_call(level="info", data="Materialized view ID: mv_id")
@@ -35,11 +35,11 @@ class TestHandleCallTool(unittest.TestCase):
         mock_request_context.session.send_log_message.assert_any_call(level="info", data="Impact analysis completed for method_name")
         self.assertEqual(result, [types.TextContent(type="text", text="Impact analysis for method: method_name\n- start_name (type) -> end_name (label)")])
 
-    @patch('codelogic_mcp_server.handlers.server.request_context')
-    @patch('codelogic_mcp_server.handlers.get_mv_id')
-    @patch('codelogic_mcp_server.handlers.get_method_entity')
-    @patch('codelogic_mcp_server.handlers.get_impact')
-    @patch('codelogic_mcp_server.handlers.find_node_by_id')
+    @patch('lineai_mcp_server.handlers.server.request_context')
+    @patch('lineai_mcp_server.handlers.get_mv_id')
+    @patch('lineai_mcp_server.handlers.get_method_entity')
+    @patch('lineai_mcp_server.handlers.get_impact')
+    @patch('lineai_mcp_server.handlers.find_node_by_id')
     async def test_handle_call_tool_function(self, mock_find_node_by_id, mock_get_impact, mock_get_method_entity, mock_get_mv_id, mock_request_context):
         # Setup mocks
         mock_request_context.session.send_log_message = AsyncMock()
@@ -54,7 +54,7 @@ class TestHandleCallTool(unittest.TestCase):
         mock_find_node_by_id.side_effect = lambda nodes, id: next(node for node in nodes if node['id'] == id)
 
         # Call the function
-        result = await handle_call_tool('codelogic-method-impact', {'function': 'function_name'})
+        result = await handle_call_tool('lineai-method-impact', {'function': 'function_name'})
 
         # Assertions
         mock_request_context.session.send_log_message.assert_any_call(level="info", data="Materialized view ID: mv_id")
@@ -69,19 +69,19 @@ class TestHandleCallTool(unittest.TestCase):
 
     async def test_handle_call_tool_missing_arguments(self):
         with self.assertRaises(ValueError) as context:
-            await handle_call_tool('codelogic-method-impact', None)
+            await handle_call_tool('lineai-method-impact', None)
         self.assertEqual(str(context.exception), "Missing arguments")
 
     async def test_handle_call_tool_missing_method_function(self):
         with self.assertRaises(ValueError) as context:
-            await handle_call_tool('codelogic-method-impact', {})
+            await handle_call_tool('lineai-method-impact', {})
         self.assertEqual(str(context.exception), "At least one of method or function must be provided")
 
-    @patch('codelogic_mcp_server.handlers.server.request_context')
+    @patch('lineai_mcp_server.handlers.server.request_context')
     async def test_handle_call_tool_missing_request_context(self, mock_request_context):
         mock_request_context.session = None
         with self.assertRaises(LookupError) as context:
-            await handle_call_tool('codelogic-method-impact', {'method': 'method_name'})
+            await handle_call_tool('lineai-method-impact', {'method': 'method_name'})
         self.assertEqual(str(context.exception), "Request context is not set")
 
 

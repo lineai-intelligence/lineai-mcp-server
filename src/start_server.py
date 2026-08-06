@@ -1,10 +1,10 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Entry point script for the CodeLogic MCP Server.
+Entry point script for the Lineai MCP Server.
 
 This script initializes and runs the Model Context Protocol (MCP) server
 with debugging capabilities. It sets up debugging via debugpy,
@@ -15,7 +15,7 @@ during server execution.
 import os
 import sys
 import asyncio
-from codelogic_mcp_server.server import main
+from lineai_mcp_server.server import main
 import debugpy
 
 # Add the src directory to Python path

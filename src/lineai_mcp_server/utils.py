@@ -1,13 +1,13 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Utility functions for the CodeLogic MCP Server.
+Utility functions for the Lineai MCP Server.
 
 This module provides helper functions for authentication, data retrieval,
-caching, and processing of code relationships from the CodeLogic server.
+caching, and processing of code relationships from the Lineai server.
 It handles API requests, caching of results, and data transformation for
 impact analysis.
 """
@@ -47,13 +47,13 @@ def get_package_version() -> str:
         return "0.0.0"  # Fallback version if we can't read pyproject.toml
 
 # Cache TTL settings from environment variables (in seconds)
-TOKEN_CACHE_TTL = int(os.getenv('CODELOGIC_TOKEN_CACHE_TTL', '3600'))  # Default 1 hour
-METHOD_CACHE_TTL = int(os.getenv('CODELOGIC_METHOD_CACHE_TTL', '300'))  # Default 5 minutes
-IMPACT_CACHE_TTL = int(os.getenv('CODELOGIC_IMPACT_CACHE_TTL', '300'))  # Default 5 minutes
+TOKEN_CACHE_TTL = int(os.getenv('LINEAI_TOKEN_CACHE_TTL', '3600'))  # Default 1 hour
+METHOD_CACHE_TTL = int(os.getenv('LINEAI_METHOD_CACHE_TTL', '300'))  # Default 5 minutes
+IMPACT_CACHE_TTL = int(os.getenv('LINEAI_IMPACT_CACHE_TTL', '300'))  # Default 5 minutes
 
 # Timeout settings from environment variables (in seconds)
-REQUEST_TIMEOUT = float(os.getenv('CODELOGIC_REQUEST_TIMEOUT', '120.0'))
-CONNECT_TIMEOUT = float(os.getenv('CODELOGIC_CONNECT_TIMEOUT', '30.0'))
+REQUEST_TIMEOUT = float(os.getenv('LINEAI_REQUEST_TIMEOUT', '120.0'))
+CONNECT_TIMEOUT = float(os.getenv('LINEAI_CONNECT_TIMEOUT', '30.0'))
 
 # Cache storage
 _cached_token = None
@@ -69,7 +69,7 @@ _client = httpx.Client(
 )
 
 # Encode the workspace name to ensure it is safe for use in API calls
-encoded_workspace_name = urllib.parse.quote(os.getenv("CODELOGIC_WORKSPACE_NAME") or "")
+encoded_workspace_name = urllib.parse.quote(os.getenv("LINEAI_WORKSPACE_NAME") or "")
 
 
 def find_node_by_id(nodes, id):
@@ -125,7 +125,7 @@ def get_mv_definition_id(mv_name, token):
     Raises:
         httpx.HTTPError: If API request fails
     """
-    url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/materialized-view-definition/name?name={mv_name}"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/materialized-view-definition/name?name={mv_name}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
@@ -149,7 +149,7 @@ def get_mv_id_from_def(mv_def_id, token):
     Raises:
         httpx.HTTPError: If API request fails
     """
-    url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/materialized-view/latest?definitionId={mv_def_id}"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/materialized-view/latest?definitionId={mv_def_id}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
@@ -191,7 +191,7 @@ def get_method_nodes(materialized_view_id, short_name):
 
     try:
         token = authenticate()
-        url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/ai-retrieval/search/shortname"
+        url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/ai-retrieval/search/shortname"
         # Match OpenAPI/Swagger: POST with query params and an empty body. Do not send
         # Content-Type: application/json with data={} — that can disagree with the
         # actual body and cause gateways or parsers to stall (504) while Swagger
@@ -288,7 +288,7 @@ def get_impact(id):
             sys.stderr.write(f"Impact cache expired for {id}\n")
 
     token = authenticate()
-    url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/dependency/impact/full/{id}/list"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/dependency/impact/full/{id}/list"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
@@ -332,7 +332,7 @@ def strip_unused_properties(response):
         properties.pop('shortName', None)
         properties.pop('materializedViewId', None)
         properties.pop('statistics.impactScore', None)
-        properties.pop('codelogic.quality.impactScore', None)
+        properties.pop('lineai.quality.impactScore', None)
         properties.pop('identity', None)
         properties.pop('name', None)
 
@@ -367,7 +367,7 @@ def extract_nodes(impact_data):
 
 def authenticate():
     """
-    Authenticate with the CodeLogic server, with token caching.
+    Authenticate with the Lineai server, with token caching.
 
     Uses credentials from environment variables to obtain an authentication token.
     Caches the token for future use to avoid unnecessary authentication requests.
@@ -389,11 +389,11 @@ def authenticate():
         else:
             sys.stderr.write("Authentication token expired\n")
 
-    url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/authenticate"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/authenticate"
     data = {
         "grant_type": "password",
-        "username": os.getenv("CODELOGIC_USERNAME"),
-        "password": os.getenv("CODELOGIC_PASSWORD")
+        "username": os.getenv("LINEAI_USERNAME"),
+        "password": os.getenv("LINEAI_PASSWORD")
     }
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -414,7 +414,7 @@ def authenticate():
 
 async def search_database_entity(entity_type, name, table_or_view=None):
     """
-    Search for database entities using the CodeLogic API.
+    Search for database entities using the Lineai API.
 
     Args:
         entity_type (str): Type of database entity (table, view, or column)
@@ -427,7 +427,7 @@ async def search_database_entity(entity_type, name, table_or_view=None):
     """
     try:
         token = authenticate()
-        url = f"{os.getenv('CODELOGIC_SERVER_HOST')}/codelogic/server/ai-retrieval/search/{entity_type}"
+        url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/ai-retrieval/search/{entity_type}"
 
         # Get materialized view ID (required parameter)
         mv_id = get_mv_id(encoded_workspace_name)
@@ -549,8 +549,8 @@ def process_database_entity_impact(impact_data, entity_type, entity_name, entity
         code_id = code_item.get("id")
         code_node = next((n for n in nodes if n['id'] == code_id), None)
         if code_node:
-            owners = code_node.get('properties', {}).get('codelogic.owners', [])
-            reviewers = code_node.get('properties', {}).get('codelogic.reviewers', [])
+            owners = code_node.get('properties', {}).get('lineai.owners', [])
+            reviewers = code_node.get('properties', {}).get('lineai.reviewers', [])
             code_owners.update(owners)
             code_reviewers.update(reviewers)
 
@@ -560,8 +560,8 @@ def process_database_entity_impact(impact_data, entity_type, entity_name, entity
                     parent_id = rel.get('startId')
                     parent_node = find_node_by_id(impact_data.get('data', {}).get('nodes', []), parent_id)
                     if parent_node and parent_node.get('primaryLabel', '').endswith('ClassEntity'):
-                        parent_owners = parent_node.get('properties', {}).get('codelogic.owners', [])
-                        parent_reviewers = parent_node.get('properties', {}).get('codelogic.reviewers', [])
+                        parent_owners = parent_node.get('properties', {}).get('lineai.owners', [])
+                        parent_reviewers = parent_node.get('properties', {}).get('lineai.reviewers', [])
                         code_owners.update(parent_owners)
                         code_reviewers.update(parent_reviewers)
 

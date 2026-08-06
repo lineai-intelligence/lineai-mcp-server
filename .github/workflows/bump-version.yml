@@ -164,7 +164,7 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
-              "text": "New Version Released: codelogic-mcp-server v${{ needs.bump-version.outputs.new_version }}",
+              "text": "New Version Released: lineai-mcp-server v${{ needs.bump-version.outputs.new_version }}",
               "blocks": [
                 {
                   "type": "section",
@@ -172,7 +172,7 @@ jobs:
                 },
                 {
                   "type": "section",
-                  "text": {"type": "mrkdwn", "text": "*Package:* codelogic-mcp-server v${{ needs.bump-version.outputs.new_version }}\n*Released by:* ${{ github.actor }}"}
+                  "text": {"type": "mrkdwn", "text": "*Package:* lineai-mcp-server v${{ needs.bump-version.outputs.new_version }}\n*Released by:* ${{ github.actor }}"}
                 },
                 {
                   "type": "section",

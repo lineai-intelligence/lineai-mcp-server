@@ -1,12 +1,12 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-MCP handlers for ``codelogic-graph-*`` tools (graph HTTP API).
+MCP handlers for ``lineai-graph-*`` tools (graph HTTP API).
 
-Request bodies use **camelCase** keys aligned with CodeLogic JSON conventions.
+Request bodies use **camelCase** keys aligned with Lineai JSON conventions.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def _run_graph_tool(
     return [types.TextContent(type="text", text=_markdown_json(tool_name, payload))]
 
 
-def handle_codelogic_graph_search(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_search(arguments: dict | None) -> list[types.TextContent]:
     args = _require_arguments(arguments)
     query = (args.get("query") or args.get("q") or "").strip()
     identity_prefix = (args.get("identity_prefix") or "").strip()
@@ -90,11 +90,11 @@ def handle_codelogic_graph_search(arguments: dict | None) -> list[types.TextCont
         }
     )
     body = _inject_materialized_view_id(body, args)
-    sys.stderr.write(f"codelogic-graph-search scope materializedViewId={body.get('materializedViewId')}\n")
-    return _run_graph_tool("codelogic-graph-search", "/search", json_body=body)
+    sys.stderr.write(f"lineai-graph-search scope materializedViewId={body.get('materializedViewId')}\n")
+    return _run_graph_tool("lineai-graph-search", "/search", json_body=body)
 
 
-def handle_codelogic_graph_impact(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_impact(arguments: dict | None) -> list[types.TextContent]:
     args = _require_arguments(arguments)
     seeds = args.get("seed_node_ids") or args.get("seedNodeIds")
     if not seeds or not isinstance(seeds, list):
@@ -108,10 +108,10 @@ def handle_codelogic_graph_impact(arguments: dict | None) -> list[types.TextCont
         }
     )
     body = _inject_materialized_view_id(body, args)
-    return _run_graph_tool("codelogic-graph-impact", "/impact", json_body=body)
+    return _run_graph_tool("lineai-graph-impact", "/impact", json_body=body)
 
 
-def handle_codelogic_graph_path_explain(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_path_explain(arguments: dict | None) -> list[types.TextContent]:
     args = _require_arguments(arguments)
     from_id = args.get("from_node_id") or args.get("fromNodeId")
     to_id = args.get("to_node_id") or args.get("toNodeId")
@@ -126,10 +126,10 @@ def handle_codelogic_graph_path_explain(arguments: dict | None) -> list[types.Te
         }
     )
     body = _inject_materialized_view_id(body, args)
-    return _run_graph_tool("codelogic-graph-path-explain", "/path", json_body=body)
+    return _run_graph_tool("lineai-graph-path-explain", "/path", json_body=body)
 
 
-def handle_codelogic_graph_validate_change_scope(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_validate_change_scope(arguments: dict | None) -> list[types.TextContent]:
     args = _require_arguments(arguments)
     seeds = args.get("seed_node_ids") or args.get("seedNodeIds")
     summary = (args.get("proposed_change_summary") or "").strip()
@@ -146,13 +146,13 @@ def handle_codelogic_graph_validate_change_scope(arguments: dict | None) -> list
     )
     body = _inject_materialized_view_id(body, args)
     return _run_graph_tool(
-        "codelogic-graph-validate-change-scope",
+        "lineai-graph-validate-change-scope",
         "/validate-change-scope",
         json_body=body,
     )
 
 
-def handle_codelogic_graph_owners(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_owners(arguments: dict | None) -> list[types.TextContent]:
     args = _require_arguments(arguments)
     node_id = args.get("node_id") or args.get("nodeId")
     identity_prefix = args.get("identity_prefix")
@@ -166,16 +166,16 @@ def handle_codelogic_graph_owners(arguments: dict | None) -> list[types.TextCont
         }
     )
     body = _inject_materialized_view_id(body, args)
-    return _run_graph_tool("codelogic-graph-owners", "/owners", json_body=body)
+    return _run_graph_tool("lineai-graph-owners", "/owners", json_body=body)
 
 
-def handle_codelogic_graph_capabilities(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_capabilities(arguments: dict | None) -> list[types.TextContent]:
     """Discovery tool (GET); requires ``materializedViewId`` (query) — default from workspace MV."""
     if arguments is None:
         arguments = {}
     mv = _resolve_materialized_view_id_str(arguments)
     return _run_graph_tool(
-        "codelogic-graph-capabilities",
+        "lineai-graph-capabilities",
         "/capabilities",
         method="GET",
         json_body=None,
@@ -184,12 +184,12 @@ def handle_codelogic_graph_capabilities(arguments: dict | None) -> list[types.Te
 
 
 GRAPH_TOOL_DISPATCH = {
-    "codelogic-graph-search": handle_codelogic_graph_search,
-    "codelogic-graph-impact": handle_codelogic_graph_impact,
-    "codelogic-graph-path-explain": handle_codelogic_graph_path_explain,
-    "codelogic-graph-validate-change-scope": handle_codelogic_graph_validate_change_scope,
-    "codelogic-graph-owners": handle_codelogic_graph_owners,
-    "codelogic-graph-capabilities": handle_codelogic_graph_capabilities,
+    "lineai-graph-search": handle_lineai_graph_search,
+    "lineai-graph-impact": handle_lineai_graph_impact,
+    "lineai-graph-path-explain": handle_lineai_graph_path_explain,
+    "lineai-graph-validate-change-scope": handle_lineai_graph_validate_change_scope,
+    "lineai-graph-owners": handle_lineai_graph_owners,
+    "lineai-graph-capabilities": handle_lineai_graph_capabilities,
 }
 
 

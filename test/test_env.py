@@ -12,14 +12,14 @@ import sys
 
 # Default test environment variables that don't expose real credentials
 DEFAULT_TEST_ENV = {
-    "CODELOGIC_TEST_MODE": "true",
-    "CODELOGIC_SERVER_HOST": "https://example.codelogic.test",
-    "CODELOGIC_USERNAME": "test_user",
-    "CODELOGIC_PASSWORD": "test_password",
-    "CODELOGIC_WORKSPACE_NAME": "test_workspace",
-    "CODELOGIC_TOKEN_CACHE_TTL": "60",  # Short cache for tests
-    "CODELOGIC_METHOD_CACHE_TTL": "60",
-    "CODELOGIC_IMPACT_CACHE_TTL": "60"
+    "LINEAI_TEST_MODE": "true",
+    "LINEAI_SERVER_HOST": "https://example.lineai.test",
+    "LINEAI_USERNAME": "test_user",
+    "LINEAI_PASSWORD": "test_password",
+    "LINEAI_WORKSPACE_NAME": "test_workspace",
+    "LINEAI_TOKEN_CACHE_TTL": "60",  # Short cache for tests
+    "LINEAI_METHOD_CACHE_TTL": "60",
+    "LINEAI_IMPACT_CACHE_TTL": "60"
 }
 
 # Apply test environment variables by default for VSCode test discovery
@@ -66,11 +66,11 @@ def test_environment(custom_env=None):
 
         # Reload modules that may have cached environment variables
         try:
-            import codelogic_mcp_server.utils
-            importlib.reload(codelogic_mcp_server.utils)
+            import lineai_mcp_server.utils
+            importlib.reload(lineai_mcp_server.utils)
 
-            import codelogic_mcp_server.handlers
-            importlib.reload(codelogic_mcp_server.handlers)
+            import lineai_mcp_server.handlers
+            importlib.reload(lineai_mcp_server.handlers)
         except ImportError:
             # Handle import errors during test discovery
             sys.stderr.write("Warning: Could not import/reload modules for testing. This is normal during test discovery.\n")

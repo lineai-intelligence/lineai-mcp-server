@@ -1,16 +1,16 @@
 [project]
-name = "codelogic-mcp-server"
+name = "lineai-mcp-server"
 version = "1.3.0"
-description = "Integrates CodeLogic's powerful codebase knowledge graphs with a Model Context Protocol (MCP) server"
+description = "Integrates Lineai's powerful codebase knowledge graphs with a Model Context Protocol (MCP) server"
 readme = "README.md"
 license = "MPL-2.0"
 requires-python = ">=3.13,<3.15"
 dependencies = [ "debugpy>=1.8.12", "httpx>=0.28.1", "mcp[cli]>=1.4.0,<2", "pip-licenses>=5.0.0", "python-dotenv>=1.0.1", "tenacity>=9.0.0", "toml>=0.10.2", "httpcore>=1.0.0", "anyio>=4.0.0",]
-keywords = [ "codelogic", "mcp", "code-analysis", "knowledge-graph", "static-analysis",]
+keywords = [ "lineai", "mcp", "code-analysis", "knowledge-graph", "static-analysis",]
 classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Developers", "Operating System :: OS Independent", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.13", "Topic :: Software Development", "Topic :: Software Development :: Libraries :: Python Modules", "Topic :: Software Development :: Code Generators", "Environment :: Console",]
 [[project.authors]]
 name = "garrmark"
-email = "mgarrison@codelogic.com"
+email = "mgarrison@lineai.net"
 
 [build-system]
 requires = [ "hatchling",]
@@ -20,12 +20,12 @@ build-backend = "hatchling.build"
 dev = [ "httpcore",]
 
 [project.urls]
-Homepage = "https://github.com/CodeLogicIncEngineering/codelogic-mcp-server"
-"Bug Tracker" = "https://github.com/CodeLogicIncEngineering/codelogic-mcp-server/issues"
-Documentation = "https://github.com/CodeLogicIncEngineering/codelogic-mcp-server#readme"
+Homepage = "https://github.com/lineai-intelligence/lineai-mcp-server"
+"Bug Tracker" = "https://github.com/lineai-intelligence/lineai-mcp-server/issues"
+Documentation = "https://github.com/lineai-intelligence/lineai-mcp-server#readme"
 
 [project.scripts]
-codelogic-mcp-server = "codelogic_mcp_server:main"
+lineai-mcp-server = "lineai_mcp_server:main"
 
 [tool.uv.sources.httpcore]
 git = "https://github.com/encode/httpcore.git"

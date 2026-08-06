@@ -4,8 +4,8 @@ from unittest.mock import Mock
 import json
 from datetime import datetime, timedelta
 from io import StringIO
-from codelogic_mcp_server.utils import strip_unused_properties, find_api_endpoints
-from codelogic_mcp_server import utils
+from lineai_mcp_server.utils import strip_unused_properties, find_api_endpoints
+from lineai_mcp_server import utils
 from test.test_env import TestCase
 
 
@@ -93,8 +93,8 @@ class TestTokenCaching(TestCase):
         utils._token_expiry = None
         # No need to set environment variables - handled by TestCase
 
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_authenticate_caches_token(self, mock_datetime, mock_post):
         """Test that authenticate() caches the token and returns it."""
         # Set up mock datetime
@@ -118,10 +118,10 @@ class TestTokenCaching(TestCase):
         # Verify request was made correctly
         mock_post.assert_called_once()
         url_arg = mock_post.call_args[0][0]
-        self.assertEqual(url_arg, 'https://example.codelogic.test/codelogic/server/authenticate')
+        self.assertEqual(url_arg, 'https://example.lineai.test/codelogic/server/authenticate')
 
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_authenticate_uses_cached_token(self, mock_datetime, mock_post):
         """Test that authenticate() returns cached token without making requests."""
         # Set up initial token cache
@@ -139,8 +139,8 @@ class TestTokenCaching(TestCase):
         self.assertEqual(token, 'cached_token')
         mock_post.assert_not_called()
 
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_authenticate_refreshes_expired_token(self, mock_datetime, mock_post):
         """Test that authenticate() refreshes token when the cached one expires."""
         # Set up initial expired token cache
@@ -183,9 +183,9 @@ class TestMethodNodesCaching(TestCase):
         self.stderr_patcher.stop()
         super().tearDown()  # Call parent tearDown to restore environment
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_method_nodes_caches_results(self, mock_datetime, mock_post, mock_authenticate):
         """Test that get_method_nodes() caches and returns method nodes."""
         # Set up mock datetime
@@ -218,9 +218,9 @@ class TestMethodNodesCaching(TestCase):
         self.assertIn(f"Method nodes cached for test.method with TTL {utils.METHOD_CACHE_TTL}s",
                       self.mock_stderr.getvalue())
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_method_nodes_uses_cache(self, mock_datetime, mock_post, mock_authenticate):
         """Test that get_method_nodes() uses cached values."""
         # Set up mock datetime
@@ -247,9 +247,9 @@ class TestMethodNodesCaching(TestCase):
         # Verify cache hit message
         self.assertIn("Method nodes cache hit for test.method", self.mock_stderr.getvalue())
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_method_nodes_refreshes_expired_cache(self, mock_datetime, mock_post, mock_authenticate):
         """Test that get_method_nodes() refreshes expired cache."""
         # Set up mock datetime
@@ -286,9 +286,9 @@ class TestMethodNodesCaching(TestCase):
         # Verify cache expired message
         self.assertIn("Method nodes cache expired for test.method", self.mock_stderr.getvalue())
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.post')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_method_nodes_404_returns_not_found(self, mock_datetime, mock_post, mock_authenticate):
         """404 from shortname search yields empty list and not_found (no raise_for_status)."""
         now = datetime(2023, 1, 1, 12, 0, 0)
@@ -330,9 +330,9 @@ class TestImpactCaching(TestCase):
         self.stderr_patcher.stop()
         super().tearDown()  # Call parent tearDown to restore environment
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.get')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_impact_caches_results(self, mock_datetime, mock_get, mock_authenticate):
         """Test that get_impact() caches and returns stripped impact data."""
         # Set up mock datetime
@@ -385,9 +385,9 @@ class TestImpactCaching(TestCase):
         self.assertIn(f"Impact cached for node-123 with TTL {utils.IMPACT_CACHE_TTL}s",
                       self.mock_stderr.getvalue())
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.get')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_impact_uses_cache(self, mock_datetime, mock_get, mock_authenticate):
         """Test that get_impact() uses cached values."""
         # Set up mock datetime
@@ -412,9 +412,9 @@ class TestImpactCaching(TestCase):
         # Verify cache hit message
         self.assertIn("Impact cache hit for node-123", self.mock_stderr.getvalue())
 
-    @mock.patch('codelogic_mcp_server.utils.authenticate')
-    @mock.patch('codelogic_mcp_server.utils._client.get')
-    @mock.patch('codelogic_mcp_server.utils.datetime')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    @mock.patch('lineai_mcp_server.utils.datetime')
     def test_get_impact_refreshes_expired_cache(self, mock_datetime, mock_get, mock_authenticate):
         """Test that get_impact() refreshes expired cache."""
         # Set up mock datetime

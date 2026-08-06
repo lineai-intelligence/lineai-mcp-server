@@ -1,8 +1,8 @@
-# CodeLogic MCP Server - AI Assistant Instructions
+# Lineai MCP Server - AI Assistant Instructions
 
 ## About This Codebase
 
-This repository contains a Model Context Protocol (MCP) server that integrates with CodeLogic's knowledge graph APIs. It enables AI programming assistants (like GitHub Copilot and Cursor) to access dependency data from CodeLogic to analyze code and database impacts.
+This repository contains a Model Context Protocol (MCP) server that integrates with Lineai's knowledge graph APIs. It enables AI programming assistants (like GitHub Copilot and Cursor) to access dependency data from Lineai to analyze code and database impacts.
 
 ## Key Technologies
 
@@ -14,7 +14,7 @@ This repository contains a Model Context Protocol (MCP) server that integrates w
 
 ## Project Structure
 
-- **src/codelogic_mcp_server/**: Core package
+- **src/lineai_mcp_server/**: Core package
 - **`__init__.py`**: Package initialization and entry point  
 - **`server.py`**: MCP server implementation  
 - **`handlers.py`**: Tool handlers implementation  
@@ -25,7 +25,7 @@ This repository contains a Model Context Protocol (MCP) server that integrates w
 ### MCP Server Pattern
 
 ```python
-server = Server("codelogic-mcp-server")
+server = Server("lineai-mcp-server")
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
@@ -58,7 +58,7 @@ except Exception as e:
 
 When implementing new MCP tools:
 
-1. Add to `handle_list_tools()` with descriptive name (prefix: `codelogic-`)
+1. Add to `handle_list_tools()` with descriptive name (prefix: `lineai-`)
 2. Add handler in `handle_call_tool()`
 3. Implement handler function with error handling
 4. Return results as markdown-formatted text
@@ -66,22 +66,22 @@ When implementing new MCP tools:
 ## Testing Approach
 
 - **Unit Tests**: For functions without external dependencies
-- **Integration Tests**: For tests against a real CodeLogic server
-- Use the `CODELOGIC_TEST_MODE` environment variable
+- **Integration Tests**: For tests against a real Lineai server
+- Use the `LINEAI_TEST_MODE` environment variable
 
 ## Debugging
 
-- Debug Mode: Set `CODELOGIC_DEBUG_MODE=true`
+- Debug Mode: Set `LINEAI_DEBUG_MODE=true`
 - Remote Debugging: Use debugpy capabilities
 
 ## Key Environment Variables
 
-- `CODELOGIC_SERVER_HOST`: CodeLogic server URL
-- `CODELOGIC_USERNAME`: Username for authentication
-- `CODELOGIC_PASSWORD`: Password for authentication
-- `CODELOGIC_WORKSPACE_NAME`: Workspace name
-- `CODELOGIC_DEBUG_MODE`: Enable debug logging
-- `CODELOGIC_TEST_MODE`: Used by test framework
+- `LINEAI_SERVER_HOST`: Lineai server URL
+- `LINEAI_USERNAME`: Username for authentication
+- `LINEAI_PASSWORD`: Password for authentication
+- `LINEAI_WORKSPACE_NAME`: Workspace name
+- `LINEAI_DEBUG_MODE`: Enable debug logging
+- `LINEAI_TEST_MODE`: Used by test framework
 
 ## AI Assistant Integration
 

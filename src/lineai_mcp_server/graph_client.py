@@ -1,12 +1,12 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-HTTP client for CodeLogic graph endpoints under ``/ai-retrieval/graph``.
+HTTP client for Lineai graph endpoints under ``/ai-retrieval/graph``.
 
-These routes are consumed by ``codelogic-graph-*`` MCP tools. The CodeLogic
+These routes are consumed by ``lineai-graph-*`` MCP tools. The Lineai
 server may return 404 until graph APIs are deployed; callers format a clear hint.
 """
 
@@ -47,10 +47,10 @@ def _graph_response_tuple(response: httpx.Response) -> tuple[Any | None, int, Gr
 
 def graph_api_base_url() -> str:
     """
-    Base URL for graph HTTP calls: ``CODELOGIC_SERVER_HOST`` (same host as all
-    other CodeLogic MCP API usage). No trailing slash.
+    Base URL for graph HTTP calls: ``LINEAI_SERVER_HOST`` (same host as all
+    other Lineai MCP API usage). No trailing slash.
     """
-    raw = (os.getenv("CODELOGIC_SERVER_HOST") or "").strip()
+    raw = (os.getenv("LINEAI_SERVER_HOST") or "").strip()
     return raw.rstrip("/")
 
 
@@ -78,7 +78,7 @@ def graph_request(
     """
     base = graph_api_base_url()
     if not base:
-        return None, 0, "http_error", "CODELOGIC_SERVER_HOST is not set"
+        return None, 0, "http_error", "LINEAI_SERVER_HOST is not set"
 
     if not path_suffix.startswith("/"):
         path_suffix = "/" + path_suffix
@@ -128,13 +128,13 @@ The MCP server called **HTTP {status_code}** on:
 
 `{host}{_GRAPH_REL_PREFIX}{path_suffix}`
 
-The CodeLogic **graph** endpoints under `/codelogic/server/ai-retrieval/graph/` are not deployed on this host yet, or the path does not match the server build.
+The Lineai **graph** endpoints under `/codelogic/server/ai-retrieval/graph/` are not deployed on this host yet, or the path does not match the server build.
 
 ## What to do
 
-1. Confirm your CodeLogic version exposes the graph agent API (see internal `context/graph-mcp-tooling-ideas.md`).
-2. Verify `CODELOGIC_SERVER_HOST` and credentials.
-3. Until the server implements these routes, use **`codelogic-method-impact`** and **`codelogic-database-impact`** for impact analysis.
+1. Confirm your Lineai version exposes the graph agent API (see internal `context/graph-mcp-tooling-ideas.md`).
+2. Verify `LINEAI_SERVER_HOST` and credentials.
+3. Until the server implements these routes, use **`lineai-method-impact`** and **`lineai-database-impact`** for impact analysis.
 {tail}"""
 
 
@@ -150,14 +150,14 @@ def graph_error_message(
     if kind == "timeout":
         return f"""# Graph request timed out: `{tool_name}`
 
-The request to `{path_suffix}` exceeded the HTTP client timeout (`CODELOGIC_REQUEST_TIMEOUT`).
+The request to `{path_suffix}` exceeded the HTTP client timeout (`LINEAI_REQUEST_TIMEOUT`).
 
 Try again later or increase the timeout if appropriate.
 """
     if kind == "gateway_timeout":
         return f"""# Graph gateway timeout: `{tool_name}`
 
-The CodeLogic server returned **504** for `{path_suffix}`.
+The Lineai server returned **504** for `{path_suffix}`.
 
 Retry when the server is less busy.
 """

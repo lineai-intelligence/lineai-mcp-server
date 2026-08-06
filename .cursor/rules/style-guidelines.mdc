@@ -1,5 +1,5 @@
 ---
-description: Style guidelines for the CodeLogic MCP Server project
+description: Style guidelines for the Lineai MCP Server project
 globs: "**/*.py"
 alwaysApply: false
 ---

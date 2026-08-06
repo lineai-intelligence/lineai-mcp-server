@@ -2,7 +2,7 @@
 
 ## Goal
 
-Design **`codelogic-mcp-server`** so developers and AI agents get **safe, explainable** guidance when changing or generating code—grounded in the **knowledge graph**.
+Design **`lineai-mcp-server`** so developers and AI agents get **safe, explainable** guidance when changing or generating code—grounded in the **knowledge graph**.
 
 ### Execution model
 
@@ -11,21 +11,21 @@ Design **`codelogic-mcp-server`** so developers and AI agents get **safe, explai
 - **Avoid ad-hoc Bolt/Cypher from MCP** for product flows: weak guardrails, credential sprawl, and hard-to-cap queries.
 - The graph may contain **Java**, **C# (.NET)**, or **mixed** scans; tools must **adapt to what is present** (labels and relationship types vary by language and pipeline).
 
-## Existing `codelogic-mcp-server` tools (baseline)
+## Existing `lineai-mcp-server` tools (baseline)
 
-This document is about **enhancements** to the **same** MCP server (`codelogic-mcp-server`), not a separate product. Implementations live alongside the current tool registrations in `src/codelogic_mcp_server/handlers.py`.
+This document is about **enhancements** to the **same** MCP server (`lineai-mcp-server`), not a separate product. Implementations live alongside the current tool registrations in `src/lineai_mcp_server/handlers.py`.
 
 ### Already shipped today
 
 | Tool | Role |
 | --- | --- |
-| **`codelogic-method-impact`** | Impact analysis for a **method** in a **class** via the **CodeLogic server** HTTP API (`CODELOGIC_WORKSPACE_NAME`, credentials in env). |
-| **`codelogic-database-impact`** | Impact between **code and database** entities (table / view / column) via the same server API. |
+| **`lineai-method-impact`** | Impact analysis for a **method** in a **class** via the **Lineai server** HTTP API (`LINEAI_WORKSPACE_NAME`, credentials in env). |
+| **`lineai-database-impact`** | Impact between **code and database** entities (table / view / column) via the same server API. |
 
 ### How graph tools relate
 
-- The proposed **`codelogic-graph-*`** tools **extend** the server’s surface area: deeper **graph discovery**, **bounded** traversals, **manifest-driven** behavior, and alignment with an **`/ai-retrieval`**-style HTTP API as that API is built out.
-- They **complement** `codelogic-method-impact` and `codelogic-database-impact` where those stay the thin, stable wrappers around existing CodeLogic endpoints; over time, graph tools may **share backend capabilities** (same graph service) while keeping **MCP contracts** distinct from the web UI.
+- The proposed **`lineai-graph-*`** tools **extend** the server’s surface area: deeper **graph discovery**, **bounded** traversals, **manifest-driven** behavior, and alignment with an **`/ai-retrieval`**-style HTTP API as that API is built out.
+- They **complement** `lineai-method-impact` and `lineai-database-impact` where those stay the thin, stable wrappers around existing Lineai endpoints; over time, graph tools may **share backend capabilities** (same graph service) while keeping **MCP contracts** distinct from the web UI.
 - CI / build-feedback pipeline patching for library upgrades is owned by neo4cape ticket-implementation prompts (`PromptConstants`), not by MCP CI tools.
 
 ## API Calls
@@ -92,42 +92,42 @@ These lessons come from **exploring** Neo4j-backed corpora (including direct gra
 
 ## MCP tool catalog (API-backed)
 
-Implementations call **`/ai-retrieval`** (or equivalent on the CodeLogic host)—**not** UI graph URLs, **not** raw Cypher from MCP.
+Implementations call **`/ai-retrieval`** (or equivalent on the Lineai host)—**not** UI graph URLs, **not** raw Cypher from MCP.
 
 ### Discovery and targeting
 
-- **`codelogic-graph-search`** — Multi-strategy scope: materialized view, workspace UUID / display name when present, optional **scan-space / branch** filter, artifact or **identity prefix** fallback; returns **`elementId`**, **`identity`**, collision hints.
-- **`codelogic-graph-scan-spaces`** (optional) — List or filter scan-space entries when multi-scan DBs.
-- **`codelogic-graph-describe-node`** — One node + bounded neighborhood.
-- **`codelogic-graph-neighborhood`** — Filtered 1–2 hop expansion.
+- **`lineai-graph-search`** — Multi-strategy scope: materialized view, workspace UUID / display name when present, optional **scan-space / branch** filter, artifact or **identity prefix** fallback; returns **`elementId`**, **`identity`**, collision hints.
+- **`lineai-graph-scan-spaces`** (optional) — List or filter scan-space entries when multi-scan DBs.
+- **`lineai-graph-describe-node`** — One node + bounded neighborhood.
+- **`lineai-graph-neighborhood`** — Filtered 1–2 hop expansion.
 
 ### Impact
 
-- **`codelogic-graph-impact`** — Seeds, direction, depth; applications **or** jars / scan buckets; **`confidence` / `static_analysis_gap`** when invoke edges are missing.
-- **`codelogic-graph-path-explain`** — Bounded paths between entities.
-- **`codelogic-graph-impact-summary`** — Aggregates by type, jar/package, optional scan dimension, owners.
+- **`lineai-graph-impact`** — Seeds, direction, depth; applications **or** jars / scan buckets; **`confidence` / `static_analysis_gap`** when invoke edges are missing.
+- **`lineai-graph-path-explain`** — Bounded paths between entities.
+- **`lineai-graph-impact-summary`** — Aggregates by type, jar/package, optional scan dimension, owners.
 
 ### Database and HTTP (when graph supports them)
 
-- **`codelogic-graph-db-usage`** / **`codelogic-graph-db-cascade-risk`** — Use **actual** relationship types in that deployment.
-- **`codelogic-graph-classpath-slice`** — `SEARCH`-based slice with caps; **zero edges** is valid.
-- **`codelogic-graph-unresolved-hints`** — Best-effort unresolved rows for a scope.
-- **`codelogic-graph-endpoint-impact`** / **`codelogic-graph-endpoint-inventory`** — Only when **`Endpoint`** (and related) data exists.
+- **`lineai-graph-db-usage`** / **`lineai-graph-db-cascade-risk`** — Use **actual** relationship types in that deployment.
+- **`lineai-graph-classpath-slice`** — `SEARCH`-based slice with caps; **zero edges** is valid.
+- **`lineai-graph-unresolved-hints`** — Best-effort unresolved rows for a scope.
+- **`lineai-graph-endpoint-impact`** / **`lineai-graph-endpoint-inventory`** — Only when **`Endpoint`** (and related) data exists.
 
 ### Workflow and guardrails
 
-- **`codelogic-graph-owners`**, **`codelogic-graph-change-checklist`**
-- **`codelogic-graph-validate-change-scope`**, **`codelogic-graph-risk-score`** (include optional **duplicate / multi-MV** penalty)
+- **`lineai-graph-owners`**, **`lineai-graph-change-checklist`**
+- **`lineai-graph-validate-change-scope`**, **`lineai-graph-risk-score`** (include optional **duplicate / multi-MV** penalty)
 
 ## Recommended MVP
 
-1. `codelogic-graph-search`  
-2. `codelogic-graph-impact`  
-3. `codelogic-graph-path-explain`  
-4. `codelogic-graph-validate-change-scope`  
-5. `codelogic-graph-owners`  
+1. `lineai-graph-search`  
+2. `lineai-graph-impact`  
+3. `lineai-graph-path-explain`  
+4. `lineai-graph-validate-change-scope`  
+5. `lineai-graph-owners`  
 
-Optional early win: **`codelogic-graph-classpath-slice`** when `SEARCH` data is useful and cheap.
+Optional early win: **`lineai-graph-classpath-slice`** when `SEARCH` data is useful and cheap.
 
 ## Design principles
 
@@ -151,7 +151,7 @@ Optional early win: **`codelogic-graph-classpath-slice`** when `SEARCH` data is 
 
 **Phase 4 — Domain packs:** Java web patterns, SQL evolution, cross-service HTTP—still behind the same API discipline.
 
-**Env (illustrative):** same **`CODELOGIC_SERVER_HOST`** as other MCP tools (graph lives under `/codelogic/server/ai-retrieval/graph/…` on that host), materialized view / definition hints aligned with existing **`materializedViewId`**-style parameters, request timeouts.
+**Env (illustrative):** same **`LINEAI_SERVER_HOST`** as other MCP tools (graph lives under `/codelogic/server/ai-retrieval/graph/…` on that host), materialized view / definition hints aligned with existing **`materializedViewId`**-style parameters, request timeouts.
 
 ## Open questions (working answers)
 
@@ -199,13 +199,13 @@ mvn -pl neo4cape-service verify -DskipITs=false -DskipUTs=true -Dit.test=AIGraph
 
 - Omit **`-Dit.test=...`** to run **all** `*TestIT` classes in the module (slow).
 
-### codelogic-mcp-server (Python, real host)
+### lineai-mcp-server (Python, real host)
 
-- **`test/integration_test_graph.py`** calls **`handle_call_tool`** for the six `codelogic-graph-*` tools against **`CODELOGIC_SERVER_HOST`** (same credentials / workspace as `integration_test_all.py`).
-- If the host returns **404** for graph routes, tests **skip** unless **`CODELOGIC_GRAPH_E2E_REQUIRED=1`** is set (then they **fail**).
+- **`test/integration_test_graph.py`** calls **`handle_call_tool`** for the six `lineai-graph-*` tools against **`LINEAI_SERVER_HOST`** (same credentials / workspace as `integration_test_all.py`).
+- If the host returns **404** for graph routes, tests **skip** unless **`LINEAI_GRAPH_E2E_REQUIRED=1`** is set (then they **fail**).
 
 ```bash
-cd codelogic-mcp-server
+cd lineai-mcp-server
 uv run python -m unittest test.integration_test_graph -v
 ```
 
@@ -218,7 +218,7 @@ uv run python -m unittest test.integration_test_graph -v
 ## Next steps
 
 1. Publish a small **`/ai-retrieval/.../capabilities`** (or equivalent) contract.  
-2. Freeze a minimal **graph contract** document **per target graph context** (labels, rels, scope rules): usually **one CodeLogic server deployment** (host/tenant) you care about, and—if schema differs materially—**scanner or graph-ingestion version band**. *Environment* here means **“this graph as deployed”** (what labels/rels actually exist), **not** a generic `.env` file; the live **`capabilities`** response stays authoritative, while the frozen doc is what you **test and document MCP against** until the manifest version bumps.  
+2. Freeze a minimal **graph contract** document **per target graph context** (labels, rels, scope rules): usually **one Lineai server deployment** (host/tenant) you care about, and—if schema differs materially—**scanner or graph-ingestion version band**. *Environment* here means **“this graph as deployed”** (what labels/rels actually exist), **not** a generic `.env` file; the live **`capabilities`** response stays authoritative, while the frozen doc is what you **test and document MCP against** until the manifest version bumps.  
 3. Define MCP tool **JSON schemas** and map each to **one or a few** HTTP operations.  
 4. Implement MVP with **id- and prefix-first** queries and strict caps.  
 5. Add **fixtures** that include **duplicates** (same name, many ids) and **multi-scan** scope for regression tests.

@@ -1,9 +1,9 @@
 ---
-description: General information about the CodeLogic MCP Server codebase and its purpose
+description: General information about the Lineai MCP Server codebase and its purpose
 globs: 
 alwaysApply: false
 ---
-- This repository contains a Model Context Protocol (MCP) server that integrates with CodeLogic's knowledge graph APIs
-- It enables AI programming assistants to access dependency data from CodeLogic to analyze code and database impacts
-- Tools: `codelogic-method-impact`, `codelogic-database-impact`, and `codelogic-graph-*` (capabilities, search, impact, path-explain, validate-change-scope, owners)
-- The core package is in `src/codelogic_mcp_server/` with `server.py`, `handlers/` (package), and `utils.py`
+- This repository contains a Model Context Protocol (MCP) server that integrates with Lineai's knowledge graph APIs
+- It enables AI programming assistants to access dependency data from Lineai to analyze code and database impacts
+- Tools: `lineai-method-impact`, `lineai-database-impact`, and `lineai-graph-*` (capabilities, search, impact, path-explain, validate-change-scope, owners)
+- The core package is in `src/lineai_mcp_server/` with `server.py`, `handlers/` (package), and `utils.py`

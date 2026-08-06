@@ -8,7 +8,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability within this project, please send an email to [devops@codelogic.com](mailto:devops@codelogic.com). All security vulnerabilities will be promptly addressed.
+If you discover a security vulnerability within this project, please send an email to [devops@lineai.net](mailto:devops@lineai.net). All security vulnerabilities will be promptly addressed.
 
 Please do not disclose security vulnerabilities publicly until they have been handled by the team.
 

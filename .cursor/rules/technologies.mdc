@@ -1,5 +1,5 @@
 ---
-description: Key technologies used in the CodeLogic MCP Server project
+description: Key technologies used in the Lineai MCP Server project
 globs: 
 alwaysApply: false
 ---
@@ -7,4 +7,4 @@ alwaysApply: false
 - Model Context Protocol SDK (`mcp[cli]`)
 - HTTPX for API requests
 - Environment variables via dotenv for configuration
-- CodeLogic graph HTTP API under `/ai-retrieval/graph/` for `codelogic-graph-*` tools
+- Lineai graph HTTP API under `/ai-retrieval/graph/` for `lineai-graph-*` tools

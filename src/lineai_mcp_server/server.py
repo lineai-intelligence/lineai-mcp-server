@@ -1,10 +1,10 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Main MCP server implementation for CodeLogic integration.
+Main MCP server implementation for Lineai integration.
 
 This module defines the MCP server instance and its initialization process.
 It handles server configuration, environment setup, and provides the main
@@ -21,10 +21,10 @@ from . import utils
 
 # Only load from .env file if we're not running tests
 # This allows tests to set their own environment variables
-if not os.environ.get('CODELOGIC_TEST_MODE'):
+if not os.environ.get('LINEAI_TEST_MODE'):
     load_dotenv()
-    print(f"CODELOGIC_SERVER_HOST: {os.environ.get('CODELOGIC_SERVER_HOST')}", file=sys.stderr)
-server = Server("codelogic-mcp-server")
+    print(f"LINEAI_SERVER_HOST: {os.environ.get('LINEAI_SERVER_HOST')}", file=sys.stderr)
+server = Server("lineai-mcp-server")
 
 
 async def main():
@@ -51,7 +51,7 @@ async def main():
                 read_stream,
                 write_stream,
                 InitializationOptions(
-                    server_name="codelogic-mcp-server",
+                    server_name="lineai-mcp-server",
                     server_version=utils.get_package_version(),
                     capabilities=server.get_capabilities(
                         notification_options=NotificationOptions(),
@@ -59,19 +59,19 @@ async def main():
                     ),
                     instructions=(
                         "When modifying existing code methods:\n"
-                        "- Use codelogic-method-impact to analyze code changes\n"
-                        "- Use codelogic-database-impact for database modifications\n"
-                        "- When the CodeLogic graph API is available, use codelogic-graph-* tools "
+                        "- Use lineai-method-impact to analyze code changes\n"
+                        "- Use lineai-database-impact for database modifications\n"
+                        "- When the Lineai graph API is available, use lineai-graph-* tools "
                         "(search, impact, path-explain, validate-change-scope, owners, capabilities) "
                         "for bounded graph discovery; otherwise rely on method/database impact tools\n"
                         "- Highlight impact results for the modified methods\n\n"
                         "When modifying SQL code or database entities:\n"
-                        "- Always use codelogic-database-impact to analyze potential impacts\n"
+                        "- Always use lineai-database-impact to analyze potential impacts\n"
                         "- Highlight impact results for the modified database entities\n\n"
-                        "To use the CodeLogic tools effectively:\n"
+                        "To use the Lineai tools effectively:\n"
                         "- For code impacts: Ask about specific methods or functions\n"
                         "- For database relationships: Ask about tables, views, or columns\n"
-                        "- For graph discovery: Prefer codelogic-graph-* tools when available\n"
+                        "- For graph discovery: Prefer lineai-graph-* tools when available\n"
                         "- Review the impact results before making changes\n"
                         "- Consider both direct and indirect impacts"
                     ),

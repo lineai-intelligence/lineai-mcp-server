@@ -1,10 +1,10 @@
-# Copyright (C) 2025 CodeLogic Inc.
+# Copyright (C) 2025 Lineai Inc.
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 """
-Common utilities and shared functions for CodeLogic MCP handlers.
+Common utilities and shared functions for Lineai MCP handlers.
 """
 
 import json
@@ -14,11 +14,11 @@ import tempfile
 from datetime import datetime
 
 
-DEBUG_MODE = os.getenv("CODELOGIC_DEBUG_MODE", "false").lower() == "true"
+DEBUG_MODE = os.getenv("LINEAI_DEBUG_MODE", "false").lower() == "true"
 
 # Use a user-specific temporary directory for logs to avoid permission issues when running via uvx
 # Only create the directory when debug mode is enabled
-LOGS_DIR = os.path.join(tempfile.gettempdir(), "codelogic-mcp-server")
+LOGS_DIR = os.path.join(tempfile.gettempdir(), "lineai-mcp-server")
 if DEBUG_MODE:
     os.makedirs(LOGS_DIR, exist_ok=True)
 
@@ -30,10 +30,10 @@ def ensure_logs_dir():
 
 
 def get_workspace_name():
-    """Get the CodeLogic workspace name from environment variable with fallback."""
-    workspace_name = os.getenv("CODELOGIC_WORKSPACE_NAME")
+    """Get the Lineai workspace name from environment variable with fallback."""
+    workspace_name = os.getenv("LINEAI_WORKSPACE_NAME")
     if not workspace_name:
-        sys.stderr.write("Warning: CODELOGIC_WORKSPACE_NAME environment variable not set. Using default workspace.\n")
+        sys.stderr.write("Warning: LINEAI_WORKSPACE_NAME environment variable not set. Using default workspace.\n")
         workspace_name = "default-workspace"
     return workspace_name
 

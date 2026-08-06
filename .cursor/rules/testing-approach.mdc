@@ -1,9 +1,9 @@
 ---
-description: Testing approach for the CodeLogic MCP Server
+description: Testing approach for the Lineai MCP Server
 globs: "**/test/*.py"
 alwaysApply: false
 ---
 - Use unit tests for functions without external dependencies
-- Use integration tests for tests against a real CodeLogic server
-- Set the `CODELOGIC_TEST_MODE` environment variable for test runs
+- Use integration tests for tests against a real Lineai server
+- Set the `LINEAI_TEST_MODE` environment variable for test runs
 - Test both success cases and error handling patterns

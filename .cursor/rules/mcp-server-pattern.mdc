@@ -7,7 +7,7 @@ alwaysApply: false
 # Use the following pattern for MCP server implementation
 
 ```python
-server = Server("codelogic-mcp-server")
+server = Server("lineai-mcp-server")
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
@@ -18,7 +18,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
     # Handle tool execution
 ```
 
-- New tools should be added to `handlers/__init__.py` `handle_list_tools()` with descriptive names (prefix: `codelogic-`)
+- New tools should be added to `handlers/__init__.py` `handle_list_tools()` with descriptive names (prefix: `lineai-`)
 - Tool handlers should be routed in `handle_call_tool()`
 - Create handler functions with proper error handling
 - Return results as markdown-formatted text
