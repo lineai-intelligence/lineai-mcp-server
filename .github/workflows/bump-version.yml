@@ -154,33 +154,42 @@ jobs:
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Notify Slack about new version
-        id: slack
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
-        with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload-templated: true
-          payload: |
-            {
-              "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
-              "text": "New Version Released: lineai-mcp-server v${{ needs.bump-version.outputs.new_version }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {"type": "mrkdwn", "text": ":tada: *New Version Released!*"}
-                },
-                {
-                  "type": "section",
-                  "text": {"type": "mrkdwn", "text": "*Package:* lineai-mcp-server v${{ needs.bump-version.outputs.new_version }}\n*Released by:* ${{ github.actor }}"}
-                },
-                {
-                  "type": "section",
-                  "text": {"type": "mrkdwn", "text": "${{ github.event.inputs.release_notes || '_No release notes provided._' }}"}
-                },
-                {
-                  "type": "section",
-                  "text": {"type": "mrkdwn", "text": ":link: <${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.bump-version.outputs.new_version }}|View Release on GitHub>"}
+      - name: Notify Teams about new version
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          VERSION: ${{ needs.bump-version.outputs.new_version }}
+          ACTOR: ${{ github.actor }}
+          NOTES: ${{ github.event.inputs.release_notes || 'No release notes provided.' }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.bump-version.outputs.new_version }}
+        run: |
+          jq -n \
+            --arg version "$VERSION" \
+            --arg actor "$ACTOR" \
+            --arg notes "$NOTES" \
+            --arg release_url "$RELEASE_URL" \
+            '{
+              type: "message",
+              attachments: [{
+                contentType: "application/vnd.microsoft.card.adaptive",
+                contentUrl: null,
+                content: {
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  type: "AdaptiveCard",
+                  version: "1.4",
+                  body: [
+                    { type: "TextBlock", weight: "Bolder", size: "Medium", text: "New Version Released" },
+                    { type: "FactSet", facts: [
+                      { title: "Package", value: ("lineai-mcp-server v" + $version) },
+                      { title: "Released by", value: $actor }
+                    ]},
+                    { type: "TextBlock", text: $notes, wrap: true }
+                  ],
+                  actions: [{
+                    type: "Action.OpenUrl",
+                    title: "View Release on GitHub",
+                    url: $release_url
+                  }]
                 }
-              ]
-            }
+              }]
+            }' | curl -fsS -X POST -H 'Content-Type: application/json' \
+                 -d @- "$TEAMS_WEBHOOK_URL"

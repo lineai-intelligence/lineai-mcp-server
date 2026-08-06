@@ -80,29 +80,37 @@ jobs:
         PACKAGE_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
         echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
     
-    - name: Notify Slack about PyPI release
-      id: slack
-      uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
-      with:
-        method: chat.postMessage
-        token: ${{ secrets.SLACK_BOT_TOKEN }}
-        payload-templated: true
-        payload: |
-          {
-            "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
-            "text": "New Release Published to PyPI: lineai-mcp-server v${{ steps.get_version.outputs.version }}",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": ":rocket: *New Release Published to PyPI!*"}
-              },
-              {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": "*Package:* lineai-mcp-server v${{ steps.get_version.outputs.version }}\n*Published by:* ${{ github.actor }}"}
-              },
-              {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": ":link: <https://pypi.org/project/lineai-mcp-server/${{ steps.get_version.outputs.version }}|View on PyPI>"}
+    - name: Notify Teams about PyPI release
+      env:
+        TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        VERSION: ${{ steps.get_version.outputs.version }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        jq -n \
+          --arg version "$VERSION" \
+          --arg actor "$ACTOR" \
+          '{
+            type: "message",
+            attachments: [{
+              contentType: "application/vnd.microsoft.card.adaptive",
+              contentUrl: null,
+              content: {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                type: "AdaptiveCard",
+                version: "1.4",
+                body: [
+                  { type: "TextBlock", weight: "Bolder", size: "Medium", text: "New Release Published to PyPI" },
+                  { type: "FactSet", facts: [
+                    { title: "Package", value: ("lineai-mcp-server v" + $version) },
+                    { title: "Published by", value: $actor }
+                  ]}
+                ],
+                actions: [{
+                  type: "Action.OpenUrl",
+                  title: "View on PyPI",
+                  url: ("https://pypi.org/project/lineai-mcp-server/" + $version)
+                }]
               }
-            ]
-          }
+            }]
+          }' | curl -fsS -X POST -H 'Content-Type: application/json' \
+               -d @- "$TEAMS_WEBHOOK_URL"
