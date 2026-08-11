@@ -125,7 +125,7 @@ def get_mv_definition_id(mv_name, token):
     Raises:
         httpx.HTTPError: If API request fails
     """
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/materialized-view-definition/name?name={mv_name}"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view-definition/name?name={mv_name}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
@@ -149,7 +149,7 @@ def get_mv_id_from_def(mv_def_id, token):
     Raises:
         httpx.HTTPError: If API request fails
     """
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/materialized-view/latest?definitionId={mv_def_id}"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view/latest?definitionId={mv_def_id}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}"
@@ -191,7 +191,7 @@ def get_method_nodes(materialized_view_id, short_name):
 
     try:
         token = authenticate()
-        url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/ai-retrieval/search/shortname"
+        url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/shortname"
         # Match OpenAPI/Swagger: POST with query params and an empty body. Do not send
         # Content-Type: application/json with data={} — that can disagree with the
         # actual body and cause gateways or parsers to stall (504) while Swagger
@@ -288,7 +288,7 @@ def get_impact(id):
             sys.stderr.write(f"Impact cache expired for {id}\n")
 
     token = authenticate()
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/dependency/impact/full/{id}/list"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/dependency/impact/full/{id}/list"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
@@ -389,7 +389,7 @@ def authenticate():
         else:
             sys.stderr.write("Authentication token expired\n")
 
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/authenticate"
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/authenticate"
     data = {
         "grant_type": "password",
         "username": os.getenv("LINEAI_USERNAME"),
@@ -427,7 +427,7 @@ async def search_database_entity(entity_type, name, table_or_view=None):
     """
     try:
         token = authenticate()
-        url = f"{os.getenv('LINEAI_SERVER_HOST')}/codelogic/server/ai-retrieval/search/{entity_type}"
+        url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/{entity_type}"
 
         # Get materialized view ID (required parameter)
         mv_id = get_mv_id(encoded_workspace_name)

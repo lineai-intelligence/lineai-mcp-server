@@ -118,7 +118,7 @@ class TestTokenCaching(TestCase):
         # Verify request was made correctly
         mock_post.assert_called_once()
         url_arg = mock_post.call_args[0][0]
-        self.assertEqual(url_arg, 'https://example.lineai.test/codelogic/server/authenticate')
+        self.assertEqual(url_arg, 'https://example.lineai.test/api/authenticate')
 
     @mock.patch('lineai_mcp_server.utils._client.post')
     @mock.patch('lineai_mcp_server.utils.datetime')

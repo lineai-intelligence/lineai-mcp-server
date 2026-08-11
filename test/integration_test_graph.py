@@ -11,7 +11,7 @@ Prerequisites (same as ``integration_test_all.py``):
 - ``LINEAI_SERVER_HOST``, ``LINEAI_USERNAME``, ``LINEAI_PASSWORD``, ``LINEAI_WORKSPACE_NAME``
 - Optional: ``.env`` / ``test/.env.test`` loaded by ``load_test_config()``
 
-The server must expose ``POST/GET .../codelogic/server/ai-retrieval/graph/*``. If graph routes
+The server must expose ``POST/GET .../api/ai-retrieval/graph/*``. If graph routes
 return 404, tests **skip** unless ``LINEAI_GRAPH_E2E_REQUIRED=1`` is set (then they **fail**).
 
 Run::
