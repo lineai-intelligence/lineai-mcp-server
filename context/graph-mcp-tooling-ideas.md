@@ -151,7 +151,7 @@ Optional early win: **`lineai-graph-classpath-slice`** when `SEARCH` data is use
 
 **Phase 4 — Domain packs:** Java web patterns, SQL evolution, cross-service HTTP—still behind the same API discipline.
 
-**Env (illustrative):** same **`LINEAI_SERVER_HOST`** as other MCP tools (graph lives under `/codelogic/server/ai-retrieval/graph/…` on that host), materialized view / definition hints aligned with existing **`materializedViewId`**-style parameters, request timeouts.
+**Env (illustrative):** same **`LINEAI_SERVER_HOST`** as other MCP tools (graph lives under `/api/ai-retrieval/graph/…` on that host), materialized view / definition hints aligned with existing **`materializedViewId`**-style parameters, request timeouts.
 
 ## Open questions (working answers)
 

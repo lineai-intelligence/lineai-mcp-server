@@ -26,7 +26,7 @@ GraphErrorKind = Optional[
 ]
 
 # Same path layout as existing ai-retrieval usage in utils.py
-_GRAPH_REL_PREFIX = "/codelogic/server/ai-retrieval/graph"
+_GRAPH_REL_PREFIX = "/api/ai-retrieval/graph"
 
 
 def _graph_response_tuple(response: httpx.Response) -> tuple[Any | None, int, GraphErrorKind, str]:
@@ -128,7 +128,7 @@ The MCP server called **HTTP {status_code}** on:
 
 `{host}{_GRAPH_REL_PREFIX}{path_suffix}`
 
-The Lineai **graph** endpoints under `/codelogic/server/ai-retrieval/graph/` are not deployed on this host yet, or the path does not match the server build.
+The Lineai **graph** endpoints under `/api/ai-retrieval/graph/` are not deployed on this host yet, or the path does not match the server build.
 
 ## What to do
 

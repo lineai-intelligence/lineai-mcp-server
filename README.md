@@ -16,7 +16,7 @@ The server implements **eight** tools: two impact tools plus six **graph** tools
 
 #### Graph API tools
 
-These call `POST` / `GET` endpoints under `/codelogic/server/ai-retrieval/graph/` on the same host as `LINEAI_SERVER_HOST`, using the same session auth as other MCP tools. If graph routes are not deployed, the server returns a clear “graph not available” style message (often after HTTP 404).
+These call `POST` / `GET` endpoints under `/api/ai-retrieval/graph/` on the same host as `LINEAI_SERVER_HOST`, using the same session auth as other MCP tools. If graph routes are not deployed, the server returns a clear “graph not available” style message (often after HTTP 404).
 
 - **lineai-graph-capabilities**: `GET` — discover supported relationship types, limits, and flags for the workspace materialized view (`materializedViewId` defaults from `LINEAI_WORKSPACE_NAME` like other tools).
 - **lineai-graph-search**: Search nodes by text `query` / `q` and/or `identity_prefix`; optional `scan_space`, `limit`, etc.
@@ -363,7 +363,7 @@ This MCP server has the following version compatibility requirements:
 
 If you're upgrading, make sure your Lineai server meets the minimum API version requirement.
 
-**Graph tools**: Require your Lineai deployment to serve the graph endpoints under `/codelogic/server/ai-retrieval/graph/`. Older or partial deployments may return 404; the MCP tools surface that as a clear error instead of opaque failures.
+**Graph tools**: Require your Lineai deployment to serve the graph endpoints under `/api/ai-retrieval/graph/`. Older or partial deployments may return 404; the MCP tools surface that as a clear error instead of opaque failures.
 
 ## Debug Logging
 
