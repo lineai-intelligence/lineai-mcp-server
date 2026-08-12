@@ -7,4 +7,4 @@ alwaysApply: false
 - Model Context Protocol SDK (`mcp[cli]`)
 - HTTPX for API requests
 - Environment variables via dotenv for configuration
-- Lineai graph HTTP API under `/ai-retrieval/graph/` for `lineai-graph-*` tools
+- Lineai HTTP API under `/api/` (formerly `/codelogic/server/`); graph routes under `/api/ai-retrieval/graph/` for `lineai-graph-*` tools
