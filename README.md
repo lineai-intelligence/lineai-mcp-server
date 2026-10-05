@@ -2,6 +2,14 @@
 
 An [MCP Server](https://modelcontextprotocol.io/introduction) to utilize Lineai's rich software dependency data in your AI programming assistant.
 
+## Documentation
+
+Code-derived architecture documentation lives in [`docs/`](docs/) (added in LIN-737):
+
+- [docs/architecture.md](docs/architecture.md) — full architecture analysis: module map, tool surface and the Lineai `/api/...` endpoints each tool calls, auth flow, caching, error-handling taxonomy, configuration, packaging/release, and findings.
+- [docs/architecture-diagrams.md](docs/architecture-diagrams.md) — Mermaid diagram set (ecosystem, module map, call sequence, auth/caching, error taxonomy).
+- [docs/rendered-diagrams/](docs/rendered-diagrams/index.md) — committed SVG renders of every diagram.
+
 ## Components
 
 ### Tools
@@ -322,14 +330,23 @@ To configure Lineai rules in Cursor:
 
 The following environment variables can be configured to customize the behavior of the server:
 
-- `LINEAI_SERVER_HOST`: The URL of the Lineai server.
-- `LINEAI_USERNAME`: Your Lineai username.
-- `LINEAI_PASSWORD`: Your Lineai password.
-- `LINEAI_WORKSPACE_NAME`: The name of the workspace to use.
+- `LINEAI_SERVER_HOST`: The URL of the Lineai server (required). All API paths (`/api/authenticate`, `/api/ai-retrieval/...`, `/api/dependency/...`, `/api/materialized-view...`) are appended to it.
+- `LINEAI_USERNAME`: Your Lineai username (required).
+- `LINEAI_PASSWORD`: Your Lineai password (required).
+- `LINEAI_WORKSPACE_NAME`: The name of the workspace to use (required in practice — it selects the materialized view every tool searches).
 - `LINEAI_DEBUG_MODE`: Set to `true` to enable debug mode. When enabled, additional debug files such as `timing_log.txt` and `impact_data*.json` will be generated. Defaults to `false`.
+
+**Tuning (optional — read once at server startup)**
+
+- `LINEAI_TOKEN_CACHE_TTL`: Authentication-token cache lifetime in seconds. Defaults to `3600`.
+- `LINEAI_METHOD_CACHE_TTL`: Method shortname-search result cache lifetime in seconds. Defaults to `300`.
+- `LINEAI_IMPACT_CACHE_TTL`: Impact-analysis result cache lifetime in seconds. Defaults to `300`.
+- `LINEAI_REQUEST_TIMEOUT`: Overall HTTP request timeout in seconds for all Lineai API calls. Defaults to `120.0`.
+- `LINEAI_CONNECT_TIMEOUT`: HTTP connect timeout in seconds. Defaults to `30.0`.
 
 **Tests only**
 
+- `LINEAI_TEST_MODE`: When set (any value), the server skips loading a `.env` file so tests fully control the environment.
 - `LINEAI_GRAPH_E2E_REQUIRED`: Set to `1` when running graph MCP integration tests if you want missing graph APIs (HTTP 404 / “Graph API not available”) to **fail** the suite instead of **skipping** those tests.
 
 ### Example Configuration
