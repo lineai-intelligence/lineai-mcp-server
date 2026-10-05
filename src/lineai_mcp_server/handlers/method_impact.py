@@ -12,11 +12,22 @@ import os
 import sys
 import time
 import mcp.types as types
-from .common import get_workspace_name, write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
-from ..utils import extract_nodes, extract_relationships, get_mv_id, get_method_nodes, get_impact, find_node_by_id, find_api_endpoints
+from .common import error_result, write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
+from ..utils import (
+    extract_nodes,
+    extract_relationships,
+    extract_unresolved_references,
+    find_api_endpoints,
+    find_node_by_id,
+    format_unresolved_references_section,
+    get_impact,
+    get_method_nodes,
+    is_unresolved_reference,
+    resolve_mv_id,
+)
 
 
-def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
+def handle_method_impact(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     """Handle the lineai-method-impact tool for method/function analysis"""
     if not arguments:
         sys.stderr.write("Missing arguments\n")
@@ -31,9 +42,8 @@ def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
         sys.stderr.write("Method must be provided\n")
         raise ValueError("Method must be provided")
 
-    # Get workspace name from environment variable
-    workspace_name = get_workspace_name()
-    mv_id = get_mv_id(workspace_name)
+    # Resolve the materialized view: explicit id -> workspace arg -> env -> server default
+    mv_id = resolve_mv_id(arguments)
 
     start_time = time.time()
     nodes, method_lookup_error = get_method_nodes(mv_id, method_name)
@@ -42,16 +52,18 @@ def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
     log_timing(f"get_method_nodes for method '{method_name}' in class '{class_name}'", duration)
 
     if not nodes:
-        if method_lookup_error == "not_found":
+        if method_lookup_error == "not_found" or method_lookup_error is None:
+            # 404 from the search API and an empty 200 are the same honest answer:
+            # the view resolved, the method is not in it. Not an infrastructure problem.
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
-## Error
-No method nodes matched this short name in the current workspace materialized view (HTTP 404 NOT_FOUND from the Lineai search API).
+## Result
+The materialized view resolved successfully (view `{mv_id}`), but no method matched the short name `{method_name}` in it. This is a definitive no-match result from the Lineai search API, not an index or infrastructure problem.
 
 ## Recommendations:
-1. Confirm the method exists in the indexed codebase and spelling matches the symbol short name.
-2. Ensure `LINEAI_WORKSPACE_NAME` points at the workspace that contains this code.
-3. If the method was added recently, the view may need to be refreshed on the Lineai server.
+1. Check the spelling of the method short name.
+2. Confirm the `workspace` / `materialized_view_id` arguments (or `LINEAI_WORKSPACE_NAME`) point at the workspace that contains this code.
+3. If the method was added recently, rebuild the materialized view on the Lineai server and retry.
 """
         elif method_lookup_error == "timeout":
             error_message = f"""# Unable to Analyze Method: `{method_name}`
@@ -78,34 +90,43 @@ The Lineai API returned **504 Gateway Timeout** while searching for method nodes
             error_message = f"""# Unable to Analyze Method: `{method_name}`
 
 ## Error
-The request to retrieve method information from the Lineai server failed (timeout, HTTP error, or empty result).
-
-## Possible causes:
-1. The method name does not exist in the indexed codebase
-2. The Lineai server is under heavy load or returned an error
-3. Network issues between the MCP server and Lineai
+The request to retrieve method information from the Lineai server failed (HTTP error or unexpected response). This is an infrastructure problem — it says nothing about whether the method exists.
 
 ## Recommendations:
 1. Check MCP stderr logs for the exact HTTP status and message
-2. Verify the method name and workspace configuration
+2. Retry; if the failure persists, check the health of the Lineai server
 3. Server: {os.getenv('LINEAI_SERVER_HOST')}
 """
-        return [
-            types.TextContent(
-                type="text",
-                text=error_message
-            )
-        ]
+        return error_result(error_message)
 
     if class_name:
-        node = next((n for n in nodes if f"|{class_name}|" in n['identity'] or f"|{class_name}.class|" in n['identity']), None)
+        # Case-insensitive substring match, consistent with the post-impact filtering below
+        node = next((n for n in nodes if class_name.lower() in (n.get('identity') or '').lower()), None)
         if not node:
-            raise ValueError(f"No matching class found for {class_name}")
+            candidates = sorted({n.get('identity') for n in nodes if n.get('identity')})
+            candidate_lines = "\n".join(f"- `{c}`" for c in candidates[:20])
+            if len(candidates) > 20:
+                candidate_lines += f"\n- *...and {len(candidates) - 20} more*"
+            return error_result(f"""# Unable to Analyze Method: `{method_name}`
+
+## Result
+The short name `{method_name}` matched in materialized view `{mv_id}`, but none of the matches belong to a class matching `{class_name}` (case-insensitive substring). This is a no-match on the class filter, not an infrastructure problem.
+
+## Candidate identities
+{candidate_lines}
+
+## Recommendations:
+1. Pick the intended match from the candidates above and adjust the `class` argument.
+2. Or omit `class` to analyze the first match.
+""")
     else:
         node = nodes[0]
 
+    # Capture the search node's id BEFORE strip_unused_properties removes properties.id
+    target_id = node['properties']['id']
+
     start_time = time.time()
-    impact = get_impact(node['properties']['id'])
+    impact = get_impact(target_id, mv_id)
     end_time = time.time()
     duration = end_time - start_time
     log_timing(f"get_impact for node '{node['name']}'", duration)
@@ -117,6 +138,7 @@ The request to retrieve method information from the Lineai server failed (timeou
     impact_data = json.loads(impact)
     nodes = extract_nodes(impact_data)
     relationships = extract_relationships(impact_data)
+    unresolved_references = extract_unresolved_references(impact_data)
 
     # Better method to find the target method node with complexity information
     target_node = None
@@ -146,9 +168,11 @@ The request to retrieve method information from the Lineai server failed (timeou
     if not target_node and method_nodes:
         target_node = method_nodes[0]
 
-    # Last resort: fall back to the original node (which might not have metrics)
+    # Last resort: fall back to the original node (which might not have metrics).
+    # Compare against the pre-strip search id: strip_unused_properties removed
+    # properties.id, but the impact nodes' top-level id carries the same value.
     if not target_node:
-        target_node = next((n for n in nodes if n['properties'].get('id') == node['properties'].get('id')), None)
+        target_node = next((n for n in nodes if n.get('id') == target_id), None)
 
     # Extract key metrics
     complexity = target_node['properties'].get('statistics.cyclomaticComplexity', 'N/A') if target_node else 'N/A'
@@ -177,7 +201,7 @@ The request to retrieve method information from the Lineai server failed (timeou
         start_node = find_node_by_id(impact_data.get('data', {}).get('nodes', []), rel['startId'])
         end_node = find_node_by_id(impact_data.get('data', {}).get('nodes', []), rel['endId'])
 
-        if start_node and end_node and end_node['id'] == node['properties'].get('id'):
+        if start_node and end_node and end_node['id'] == target_id:
             # This is an incoming relationship (dependent)
             dependents.append({
                 "name": start_node.get('name'),
@@ -233,6 +257,8 @@ The request to retrieve method information from the Lineai server failed (timeou
     nodes_table += "|------|------|------------|-------------------|-------------|---------------|---------------|\n"
 
     for node_item in nodes:
+        if is_unresolved_reference(node_item):
+            continue  # URs carry no metrics; they get their own report section
         name = node_item['name']
         node_type = node_item['primaryLabel']
         node_complexity = node_item['properties'].get('statistics.cyclomaticComplexity', 'N/A')
@@ -289,6 +315,7 @@ The request to retrieve method information from the Lineai server failed (timeou
 ## Summary
 - **Method**: `{method_name}`
 - **Class**: `{class_name or 'N/A'}`
+- **Materialized View**: `{mv_id}`
 """
 
     # Add code ownership information if available
@@ -388,6 +415,11 @@ This analysis focuses on systems that depend on `{method_name}`. Modifying this 
             impact_description += f"- `{dep['name']}` ({dep['type']}) via `{dep['relationship']}`\n"
     else:
         impact_description += "No components directly depend on this method. The change appears to be isolated.\n"
+
+    # Unresolved references are dependency indicators; section omitted when none
+    unresolved_section = format_unresolved_references_section(unresolved_references)
+    if unresolved_section:
+        impact_description += f"\n{unresolved_section}"
 
     impact_description += f"\n## Detailed Node Metrics\n{nodes_table}\n"
 

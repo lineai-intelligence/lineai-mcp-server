@@ -539,12 +539,164 @@ def get_impact(id, mv_id=None):
     return result
 
 
+def is_unresolved_reference(node) -> bool:
+    """
+    Detect whether an impact/search node is an unresolved reference (UR).
+
+    URs are per-view nodes materialized for searches that could not be
+    resolved to a concrete node. Tolerates both server conventions:
+    current servers return top-level ``primaryLabel == "SearchNode"`` with
+    ``properties.primaryLabel == "UnresolvedReference"``; normalized servers
+    return ``"UnresolvedReference"`` at the top level.
+
+    Args:
+        node (dict): A node from impact or search data.
+
+    Returns:
+        bool: True when the node is an unresolved reference.
+    """
+    if not isinstance(node, dict):
+        return False
+    properties = node.get('properties') or {}
+    if properties.get('primaryLabel') == 'UnresolvedReference':
+        return True
+    return node.get('primaryLabel') in ('SearchNode', 'UnresolvedReference')
+
+
+def extract_unresolved_references(impact_data):
+    """
+    Extract unresolved references (URs) from impact analysis data.
+
+    For each UR node, returns the sought specification, target labels
+    (per-view ``v-...`` labels filtered out), fuzzy criteria (the server
+    serializes these as a JSON string — parsed defensively), endpoint
+    details (read from both flat ``endpoint.*`` keys and a nested
+    ``endpoint`` object), and the nodes referencing the UR via
+    relationship endpoints.
+
+    Args:
+        impact_data (dict): Parsed impact analysis data.
+
+    Returns:
+        List[Dict]: One dict per unresolved reference; empty when none.
+    """
+    data = impact_data.get('data') or {}
+    nodes = data.get('nodes') or []
+    relationships = data.get('relationships') or []
+    nodes_by_id = {n.get('id'): n for n in nodes if isinstance(n, dict)}
+
+    unresolved = []
+    for node in nodes:
+        if not is_unresolved_reference(node):
+            continue
+        properties = node.get('properties') or {}
+
+        sought = node.get('name') or properties.get('name') or ''
+
+        labels = [
+            label for label in (properties.get('labels') or [])
+            if isinstance(label, str) and not label.startswith('v-') and label != 'UnresolvedReference'
+        ]
+
+        fuzzy = properties.get('fuzzy')
+        if isinstance(fuzzy, str) and fuzzy.strip():
+            try:
+                fuzzy = json.loads(fuzzy)
+            except (ValueError, TypeError):
+                pass  # keep the raw string
+
+        endpoint = {}
+        nested_endpoint = properties.get('endpoint')
+        if isinstance(nested_endpoint, dict):
+            endpoint.update({k: v for k, v in nested_endpoint.items() if v is not None})
+        for key, value in properties.items():
+            if isinstance(key, str) and key.startswith('endpoint.') and value is not None:
+                endpoint[key.split('.', 1)[1]] = value
+
+        node_id = node.get('id')
+        referenced_by = []
+        for rel in relationships:
+            if not isinstance(rel, dict) or rel.get('endId') != node_id:
+                continue
+            source = nodes_by_id.get(rel.get('startId'))
+            if source and not is_unresolved_reference(source):
+                referenced_by.append({
+                    'name': source.get('name'),
+                    'type': source.get('primaryLabel'),
+                    'relationship': rel.get('type'),
+                })
+
+        unresolved.append({
+            'id': node_id,
+            'sought': sought,
+            'target_labels': labels,
+            'identity': properties.get('identity') or node.get('identity'),
+            'fuzzy': fuzzy,
+            'endpoint': endpoint,
+            'query_hash': properties.get('queryHash'),
+            'referenced_by': referenced_by,
+        })
+    return unresolved
+
+
+def _escape_markdown_cell(text) -> str:
+    """Escape pipe characters so synthetic UR names don't break table rows."""
+    return str(text).replace('|', '\\|')
+
+
+def format_unresolved_references_section(unresolved) -> str:
+    """
+    Render unresolved references as a markdown report section.
+
+    Args:
+        unresolved (List[Dict]): Output of ``extract_unresolved_references``.
+
+    Returns:
+        str: The "## Unresolved References" section, or ``""`` when there are
+        none (the section is omitted entirely, which keeps reports unchanged
+        against servers that do not emit URs).
+    """
+    if not unresolved:
+        return ""
+
+    section = "## Unresolved References (dependency indicators)\n\n"
+    section += (
+        "The impact graph contains references that could not be resolved to a concrete node "
+        "inside the analyzed view. The referencing code depends on something outside of — or "
+        "not resolvable in — this view; treat these as real dependencies when assessing risk.\n\n"
+    )
+    section += "| Sought | Target Labels | Endpoint | Referenced By |\n"
+    section += "|--------|---------------|----------|---------------|\n"
+    for ur in unresolved:
+        sought = _escape_markdown_cell(ur.get('sought') or '(unknown)')
+
+        labels = ", ".join(ur.get('target_labels') or []) or "-"
+
+        endpoint = ur.get('endpoint') or {}
+        verb_path = " ".join(str(endpoint[k]) for k in ('httpMethod', 'path') if endpoint.get(k))
+        endpoint_text = verb_path or "; ".join(f"{k}={v}" for k, v in endpoint.items()) or "-"
+
+        refs = ur.get('referenced_by') or []
+        refs_text = "; ".join(
+            f"`{_escape_markdown_cell(r.get('name'))}` ({r.get('type')}, {r.get('relationship')})"
+            for r in refs
+        ) or "-"
+
+        section += (
+            f"| `{sought}` | {_escape_markdown_cell(labels)} | "
+            f"{_escape_markdown_cell(endpoint_text)} | {refs_text} |\n"
+        )
+    return section
+
+
 def strip_unused_properties(response):
     """
     Remove unnecessary properties from impact analysis response.
 
     This optimizes the data size by removing fields that aren't needed
-    for analysis.
+    for analysis. Unresolved-reference nodes are left untouched: their
+    properties (synthetic name, labels, fuzzy criteria, endpoint details)
+    carry the information the UR report section is built from.
 
     Args:
         response (httpx.Response): API response with impact analysis data
@@ -556,6 +708,8 @@ def strip_unused_properties(response):
 
     # Strip out specific fields
     for node in data.get('data', {}).get('nodes', []):
+        if is_unresolved_reference(node):
+            continue
         properties = node.get('properties', {})
         properties.pop('agentIds', None)
         properties.pop('sourceScanContextIds', None)

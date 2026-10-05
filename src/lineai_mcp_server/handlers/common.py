@@ -30,16 +30,6 @@ def ensure_logs_dir():
         os.makedirs(LOGS_DIR, exist_ok=True)
 
 
-def get_workspace_name():
-    """Deprecated: workspace resolution now goes through ``utils.resolve_mv_id``."""
-    import sys
-    workspace_name = os.getenv("LINEAI_WORKSPACE_NAME")
-    if not workspace_name:
-        sys.stderr.write("Warning: LINEAI_WORKSPACE_NAME environment variable not set. Using default workspace.\n")
-        workspace_name = "default-workspace"
-    return workspace_name
-
-
 def error_result(markdown: str) -> types.CallToolResult:
     """Build a CallToolResult that is marked as an error (isError=True)."""
     return types.CallToolResult(
