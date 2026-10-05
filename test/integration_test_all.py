@@ -77,17 +77,22 @@ class TestHandleCallToolIntegration(TestCase):
         async def run_test():
             result = await handle_call_tool('lineai-method-impact', {'method': method_name, 'class': class_name})
 
-            self.assertIsInstance(result, list)
-            self.assertGreater(len(result), 0)
-            self.assertIsInstance(result[0], types.TextContent)
+            # Error pages are CallToolResult(isError=True); success is a list of TextContent
+            if isinstance(result, types.CallToolResult):
+                text = result.content[0].text
+            else:
+                self.assertIsInstance(result, list)
+                self.assertGreater(len(result), 0)
+                self.assertIsInstance(result[0], types.TextContent)
+                text = result[0].text
 
-            if "Unable to Analyze" in result[0].text:
+            if "Unable to Analyze" in text:
                 self.skipTest("Method not found or server error (404/504) for this workspace")
 
             with open(output_file, 'w', encoding='utf-8') as file:
-                file.write(result[0].text)
+                file.write(text)
 
-            self.assertIn(f"# Impact Analysis for Method: `{method_name}`", result[0].text)
+            self.assertIn(f"# Impact Analysis for Method: `{method_name}`", text)
             return result
 
         return asyncio.run(run_test())
@@ -132,8 +137,8 @@ class TestUtils(TestCase):
             get_mv_definition_id, get_mv_id_from_def, get_method_nodes, get_impact, authenticate = setup_test_environment(config)[1:6]
             cls.token = authenticate()
             cls.mv_name = os.getenv('LINEAI_WORKSPACE_NAME')
-            cls.mv_def_id = get_mv_definition_id(cls.mv_name, cls.token)
-            cls.mv_id = get_mv_id_from_def(cls.mv_def_id, cls.token)
+            cls.mv_def_id = get_mv_definition_id(cls.mv_name)
+            cls.mv_id = get_mv_id_from_def(cls.mv_def_id)
             cls.nodes, _ = get_method_nodes(cls.mv_id, 'IsValid')
             cls.get_method_nodes = get_method_nodes
             cls.get_impact = get_impact

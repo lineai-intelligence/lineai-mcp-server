@@ -52,6 +52,13 @@ def _extract_json_from_mcp_markdown(text: str) -> dict:
     return json.loads(m.group(1))
 
 
+def _result_text(result) -> str:
+    """Extract markdown text from a handler result (list of TextContent or CallToolResult)."""
+    if isinstance(result, types.CallToolResult):
+        return result.content[0].text
+    return result[0].text
+
+
 def _is_server_reachable(config: dict) -> bool:
     if not config.get("LINEAI_SERVER_HOST") or not config.get("LINEAI_USERNAME") or not config.get("LINEAI_PASSWORD"):
         return False
@@ -108,9 +115,7 @@ class TestGraphMcpE2E(TestCase):
             return await self._call_tool("lineai-graph-capabilities", {})
 
         out = asyncio.run(run())
-        self.assertIsInstance(out, list)
-        self.assertIsInstance(out[0], types.TextContent)
-        envelope = self._require_graph_or_skip(out[0].text)
+        envelope = self._require_graph_or_skip(_result_text(out))
         self.assertIn("data", envelope)
         data = envelope["data"]
         self.assertIsNotNone(data)
@@ -124,7 +129,7 @@ class TestGraphMcpE2E(TestCase):
             )
 
         s_out = asyncio.run(search())
-        envelope = self._require_graph_or_skip(s_out[0].text)
+        envelope = self._require_graph_or_skip(_result_text(s_out))
         nodes = (envelope.get("data") or {}).get("nodes") or []
         if not nodes:
             self.skipTest("No search hits for query 'load' in this workspace")
@@ -140,7 +145,7 @@ class TestGraphMcpE2E(TestCase):
             )
 
         i_out = asyncio.run(impact())
-        self._require_graph_or_skip(i_out[0].text)
+        self._require_graph_or_skip(_result_text(i_out))
 
         async def path():
             return await self._call_tool(
@@ -149,7 +154,7 @@ class TestGraphMcpE2E(TestCase):
             )
 
         p_out = asyncio.run(path())
-        self._require_graph_or_skip(p_out[0].text)
+        self._require_graph_or_skip(_result_text(p_out))
 
         async def validate():
             return await self._call_tool(
@@ -161,13 +166,13 @@ class TestGraphMcpE2E(TestCase):
             )
 
         v_out = asyncio.run(validate())
-        self._require_graph_or_skip(v_out[0].text)
+        self._require_graph_or_skip(_result_text(v_out))
 
         async def owners():
             return await self._call_tool("lineai-graph-owners", {"node_id": node_id})
 
         o_out = asyncio.run(owners())
-        self._require_graph_or_skip(o_out[0].text)
+        self._require_graph_or_skip(_result_text(o_out))
 
 
 if __name__ == "__main__":

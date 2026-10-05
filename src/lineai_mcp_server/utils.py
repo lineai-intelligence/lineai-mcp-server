@@ -16,40 +16,51 @@ import os
 import sys
 import httpx
 import json
-import toml
+import threading
 from datetime import datetime, timedelta
+from importlib import metadata as importlib_metadata
 from typing import Dict, Any, List
-import urllib.parse
 
 def get_package_version() -> str:
     """
-    Get the package version from pyproject.toml.
-    
+    Get the installed package version.
+
+    Uses ``importlib.metadata`` (works for any install mode, including uvx);
+    falls back to reading pyproject.toml for in-repo source checkouts, and to
+    "0.0.0" when neither source is available.
+
     Returns:
-        str: The package version from pyproject.toml
-        
-    Raises:
-        FileNotFoundError: If pyproject.toml cannot be found
-        KeyError: If version cannot be found in pyproject.toml
+        str: The package version
     """
     try:
-        # Get the directory containing this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
+        return importlib_metadata.version("lineai-mcp-server")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    except Exception as e:
+        sys.stderr.write(f"Warning: Could not read version from package metadata: {e}\n")
+
+    try:
+        import tomllib
         # Go up to the project root (where pyproject.toml is)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(os.path.dirname(current_dir))
         pyproject_path = os.path.join(project_root, 'pyproject.toml')
-        
-        with open(pyproject_path, 'r') as f:
-            config = toml.load(f)
+        with open(pyproject_path, 'rb') as f:
+            config = tomllib.load(f)
             return config['project']['version']
     except Exception as e:
-        print(f"Warning: Could not read version from pyproject.toml: {e}", file=sys.stderr)
-        return "0.0.0"  # Fallback version if we can't read pyproject.toml
+        sys.stderr.write(f"Warning: Could not read version from pyproject.toml: {e}\n")
+        return "0.0.0"  # Fallback version if we can't determine the version
 
 # Cache TTL settings from environment variables (in seconds)
 TOKEN_CACHE_TTL = int(os.getenv('LINEAI_TOKEN_CACHE_TTL', '3600'))  # Default 1 hour
 METHOD_CACHE_TTL = int(os.getenv('LINEAI_METHOD_CACHE_TTL', '300'))  # Default 5 minutes
 IMPACT_CACHE_TTL = int(os.getenv('LINEAI_IMPACT_CACHE_TTL', '300'))  # Default 5 minutes
+MV_CACHE_TTL = int(os.getenv('LINEAI_MV_CACHE_TTL', '300'))  # Default 5 minutes
+
+# Safety margin (seconds) subtracted from a server-provided ``expires_in`` so we
+# refresh the token before the server actually rejects it.
+TOKEN_EXPIRY_MARGIN = 30
 
 # Timeout settings from environment variables (in seconds)
 REQUEST_TIMEOUT = float(os.getenv('LINEAI_REQUEST_TIMEOUT', '120.0'))
@@ -58,8 +69,13 @@ CONNECT_TIMEOUT = float(os.getenv('LINEAI_CONNECT_TIMEOUT', '30.0'))
 # Cache storage
 _cached_token = None
 _token_expiry = None
+_token_lock = threading.Lock()
 _method_nodes_cache: Dict[str, tuple[List[Any], datetime]] = {}
 _impact_cache: Dict[str, tuple[str, datetime]] = {}
+_mv_cache: Dict[str, tuple[str, datetime]] = {}
+
+# Cache key used for the server-side default materialized view (no workspace name given)
+_DEFAULT_MV_CACHE_KEY = "<server-default>"
 
 # Configure HTTP client with improved settings
 _client = httpx.Client(
@@ -68,8 +84,134 @@ _client = httpx.Client(
     transport=httpx.HTTPTransport(retries=3)
 )
 
-# Encode the workspace name to ensure it is safe for use in API calls
-encoded_workspace_name = urllib.parse.quote(os.getenv("LINEAI_WORKSPACE_NAME") or "")
+
+class LineaiApiError(Exception):
+    """
+    Typed error for Lineai API failures.
+
+    Attributes:
+        kind (str): One of ``auth``, ``mv_not_found``, ``mv_no_default``,
+            ``timeout``, ``gateway_timeout``, ``http_error``, ``invalid_response``.
+        status (int | None): HTTP status code when one was received.
+        detail (str): Human-readable detail (server message or exception text).
+        endpoint (str): The URL that was being called.
+    """
+
+    KINDS = (
+        "auth",
+        "mv_not_found",
+        "mv_no_default",
+        "timeout",
+        "gateway_timeout",
+        "http_error",
+        "invalid_response",
+    )
+
+    def __init__(self, kind: str, status: int | None = None, detail: str = "", endpoint: str = ""):
+        self.kind = kind if kind in self.KINDS else "http_error"
+        self.status = status
+        self.detail = detail
+        self.endpoint = endpoint
+        message = self.kind
+        if status is not None:
+            message += f" (HTTP {status})"
+        if detail:
+            message += f": {detail}"
+        if endpoint:
+            message += f" [{endpoint}]"
+        super().__init__(message)
+
+
+def invalidate_token():
+    """Invalidate the cached authentication token (e.g. after a 401)."""
+    global _cached_token, _token_expiry
+    with _token_lock:
+        _cached_token = None
+        _token_expiry = None
+
+
+def _response_snippet(response) -> str:
+    """Best-effort truncated response text for diagnostics."""
+    try:
+        text = response.text or ""
+    except Exception:
+        return ""
+    return text[:500] if isinstance(text, str) else ""
+
+
+def _raise_for_unexpected_status(response, url):
+    """Map non-2xx statuses (other than ones the caller handled) to LineaiApiError."""
+    code = response.status_code
+    if code == 504:
+        raise LineaiApiError("gateway_timeout", status=504, detail=_response_snippet(response), endpoint=url)
+    if code >= 400:
+        raise LineaiApiError("http_error", status=code, detail=_response_snippet(response), endpoint=url)
+
+
+def _authed_request(method, url, *, params=None, json_body=None, data=None, headers=None):
+    """
+    Perform an authenticated HTTP request against the Lineai server.
+
+    This is the ONLY place that attaches auth headers. On a 401 or 403
+    response the cached token is invalidated and the request retried exactly
+    once with a fresh token; a second 401/403 raises ``LineaiApiError('auth')``.
+    (The Lineai server answers bad or expired tokens with 403, not 401 —
+    verified live during LIN-699 e2e — so both are treated as auth failures.)
+    Transport errors are mapped to ``LineaiApiError`` (``timeout`` /
+    ``http_error``).
+
+    Args:
+        method (str): ``GET`` or ``POST``.
+        url (str): Absolute URL to call.
+        params (dict, optional): Query string parameters.
+        json_body (dict, optional): JSON body for POST (``{}`` sends an empty object).
+        data (dict, optional): Form-encoded body for POST.
+        headers (dict, optional): Extra headers (merged over defaults).
+
+    Returns:
+        httpx.Response: The raw response for status mapping by the caller.
+
+    Raises:
+        LineaiApiError: On auth failure or transport errors.
+    """
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+
+    for attempt in (1, 2):
+        token = authenticate()
+        request_headers["Authorization"] = f"Bearer {token}"
+        try:
+            m = method.upper()
+            if m == "GET":
+                response = _client.get(url, headers=request_headers, params=params)
+            elif m == "POST":
+                if json_body is not None:
+                    response = _client.post(url, headers=request_headers, params=params, json=json_body)
+                elif data is not None:
+                    response = _client.post(url, headers=request_headers, params=params, data=data)
+                else:
+                    response = _client.post(url, headers=request_headers, params=params)
+            else:
+                raise LineaiApiError("http_error", detail=f"Unsupported HTTP method: {method}", endpoint=url)
+        except httpx.TimeoutException as e:
+            raise LineaiApiError("timeout", detail=str(e), endpoint=url) from e
+        except httpx.HTTPError as e:
+            raise LineaiApiError("http_error", detail=str(e), endpoint=url) from e
+
+        if response.status_code in (401, 403) and attempt == 1:
+            sys.stderr.write(
+                f"{response.status_code} from {url}; invalidating cached token and retrying once\n"
+            )
+            invalidate_token()
+            continue
+        if response.status_code in (401, 403):
+            raise LineaiApiError(
+                "auth", status=response.status_code,
+                detail="Authentication rejected after a token refresh",
+                endpoint=url,
+            )
+        return response
 
 
 def find_node_by_id(nodes, id):
@@ -91,72 +233,165 @@ def find_node_by_id(nodes, id):
 
 def get_mv_id(mv_name):
     """
-    Get materialized view ID using its name.
+    Get materialized view ID using its workspace / view name.
 
-    This is a helper function that combines authentication, getting the
-    materialized view definition ID by name, and then retrieving the actual
-    materialized view ID from the definition.
+    Combines getting the materialized view definition ID by name and then
+    retrieving the latest materialized view ID for that definition.
 
     Args:
-        mv_name (str): The name of the materialized view
+        mv_name (str): The name of the materialized view / workspace
 
     Returns:
         str: The materialized view ID
 
     Raises:
-        httpx.HTTPError: If API requests fail
+        LineaiApiError: ``mv_not_found`` when the name or its latest view is
+            unknown; other kinds on auth / transport / HTTP failures.
     """
-    token = authenticate()
-    mv_def_id = get_mv_definition_id(mv_name, token)
-    return get_mv_id_from_def(mv_def_id, token)
+    mv_def_id = get_mv_definition_id(mv_name)
+    return get_mv_id_from_def(mv_def_id)
 
 
-def get_mv_definition_id(mv_name, token):
+def get_mv_definition_id(mv_name):
     """
     Get materialized view definition ID by name.
 
     Args:
-        mv_name (str): The name of the materialized view
-        token (str): Authentication token
+        mv_name (str): The name of the materialized view / workspace
 
     Returns:
         str: The definition ID of the materialized view
 
     Raises:
-        httpx.HTTPError: If API request fails
+        LineaiApiError: ``mv_not_found`` on 404; other kinds on failure.
     """
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view-definition/name?name={mv_name}"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
-    response = _client.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json()['data']['id']
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view-definition/name"
+    response = _authed_request("GET", url, params={"name": mv_name})
+    if response.status_code == 404:
+        raise LineaiApiError(
+            "mv_not_found", status=404,
+            detail=f"No materialized view definition named {mv_name!r}",
+            endpoint=url,
+        )
+    _raise_for_unexpected_status(response, url)
+    try:
+        return response.json()['data']['id']
+    except (KeyError, TypeError, ValueError) as e:
+        raise LineaiApiError("invalid_response", detail=f"Unexpected definition payload: {e}", endpoint=url) from e
 
 
-def get_mv_id_from_def(mv_def_id, token):
+def get_mv_id_from_def(mv_def_id):
     """
-    Get materialized view ID from its definition ID.
+    Get the latest materialized view ID from its definition ID.
 
     Args:
         mv_def_id (str): The materialized view definition ID
-        token (str): Authentication token
 
     Returns:
         str: The materialized view ID
 
     Raises:
-        httpx.HTTPError: If API request fails
+        LineaiApiError: ``mv_not_found`` on 404; other kinds on failure.
     """
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view/latest?definitionId={mv_def_id}"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
-    response = _client.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json()['data']['id']
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view/latest"
+    response = _authed_request("GET", url, params={"definitionId": mv_def_id})
+    if response.status_code == 404:
+        raise LineaiApiError(
+            "mv_not_found", status=404,
+            detail=f"No finished materialized view for definition {mv_def_id!r}",
+            endpoint=url,
+        )
+    _raise_for_unexpected_status(response, url)
+    try:
+        return response.json()['data']['id']
+    except (KeyError, TypeError, ValueError) as e:
+        raise LineaiApiError("invalid_response", detail=f"Unexpected view payload: {e}", endpoint=url) from e
+
+
+def get_default_mv_id():
+    """
+    Get the latest finished materialized view ID of the server's default workspace.
+
+    Uses ``GET /api/materialized-view/default`` which resolves the primary
+    workspace's latest finished view in one call. The ``data`` field of the
+    response IS the bare view id (not an object).
+
+    Returns:
+        str: The default materialized view ID
+
+    Raises:
+        LineaiApiError: ``mv_no_default`` on 404; other kinds on failure.
+    """
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/materialized-view/default"
+    response = _authed_request("GET", url)
+    if response.status_code == 404:
+        raise LineaiApiError(
+            "mv_no_default", status=404,
+            detail="The server has no default materialized view available",
+            endpoint=url,
+        )
+    _raise_for_unexpected_status(response, url)
+    try:
+        data = response.json().get('data')
+    except ValueError as e:
+        raise LineaiApiError("invalid_response", detail=f"Non-JSON default-view payload: {e}", endpoint=url) from e
+    if isinstance(data, dict):  # tolerate an object-shaped payload defensively
+        data = data.get('id')
+    if data is None:
+        raise LineaiApiError("invalid_response", detail="Default-view payload carried no id", endpoint=url)
+    return str(data)
+
+
+def resolve_mv_id(arguments):
+    """
+    Resolve the materialized view ID for a tool call, with caching.
+
+    Precedence (always bottoms out at the server default — "nothing specified"
+    is never an error as long as a default materialized view exists):
+
+    1. Explicit ``materialized_view_id`` (or ``materializedViewId``) argument
+    2. ``workspace`` (name) argument
+    3. ``LINEAI_WORKSPACE_NAME`` environment variable
+    4. The server's default workspace's latest materialized view
+
+    Name-based and default resolutions are cached for ``LINEAI_MV_CACHE_TTL``
+    seconds (default 300).
+
+    Args:
+        arguments (dict | None): The tool call arguments.
+
+    Returns:
+        str: The materialized view ID.
+
+    Raises:
+        LineaiApiError: ``mv_not_found`` / ``mv_no_default`` when resolution
+            fails; other kinds on auth / transport / HTTP failures.
+    """
+    args = arguments or {}
+    explicit = args.get("materialized_view_id") or args.get("materializedViewId")
+    if explicit:
+        return str(explicit)
+
+    workspace = args.get("workspace") or os.getenv("LINEAI_WORKSPACE_NAME") or None
+    cache_key = workspace if workspace else _DEFAULT_MV_CACHE_KEY
+    now = datetime.now()
+
+    cached = _mv_cache.get(cache_key)
+    if cached:
+        mv_id, expiry = cached
+        if now < expiry:
+            sys.stderr.write(f"Materialized view cache hit for {cache_key}\n")
+            return mv_id
+        sys.stderr.write(f"Materialized view cache expired for {cache_key}\n")
+
+    if workspace:
+        mv_id = str(get_mv_id(workspace))
+    else:
+        mv_id = str(get_default_mv_id())
+
+    _mv_cache[cache_key] = (mv_id, now + timedelta(seconds=MV_CACHE_TTL))
+    sys.stderr.write(f"Materialized view cached for {cache_key} with TTL {MV_CACHE_TTL}s\n")
+    return mv_id
 
 
 def get_method_nodes(materialized_view_id, short_name):
@@ -189,55 +424,60 @@ def get_method_nodes(materialized_view_id, short_name):
         else:
             sys.stderr.write(f"Method nodes cache expired for {short_name}\n")
 
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/shortname"
+    # Match OpenAPI/Swagger: POST with query params and an empty body. Do not send
+    # Content-Type: application/json with data={} — that can disagree with the
+    # actual body and cause gateways or parsers to stall (504) while Swagger
+    # succeeds quickly with an empty body.
+    params = {
+        "materializedViewId": materialized_view_id,
+        "shortname": short_name
+    }
+
+    sys.stderr.write(f"Requesting method nodes for {short_name} with timeout {REQUEST_TIMEOUT}s\n")
     try:
-        token = authenticate()
-        url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/shortname"
-        # Match OpenAPI/Swagger: POST with query params and an empty body. Do not send
-        # Content-Type: application/json with data={} — that can disagree with the
-        # actual body and cause gateways or parsers to stall (504) while Swagger
-        # succeeds quickly with an empty body.
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "*/*",
-        }
-        params = {
-            "materializedViewId": materialized_view_id,
-            "shortname": short_name
-        }
+        response = _authed_request("POST", url, params=params, headers={"Accept": "*/*"})
+    except LineaiApiError as e:
+        if e.kind == "auth":
+            raise  # honest auth taxonomy handled by the dispatcher
+        sys.stderr.write(f"Error fetching method nodes for {short_name}: {e}\n")
+        if e.kind == "timeout":
+            return [], "timeout"
+        return [], "http_error"
 
-        sys.stderr.write(f"Requesting method nodes for {short_name} with timeout {REQUEST_TIMEOUT}s\n")
-        response = _client.post(url, headers=headers, params=params)
+    if response.status_code == 404:
+        detail = ""
+        try:
+            body = response.json()
+            detail = (body.get("error") or {}).get("message", "") or ""
+        except Exception:
+            pass
+        suffix = f": {detail}" if detail else ""
+        sys.stderr.write(f"No method nodes for shortname {short_name!r} (404){suffix}\n")
+        return [], "not_found"
+    if response.status_code == 504:
+        sys.stderr.write(f"HTTP 504 fetching method nodes for {short_name}\n")
+        return [], "gateway_timeout"
+    if response.status_code >= 400:
+        sys.stderr.write(f"HTTP error {response.status_code} fetching method nodes for {short_name}\n")
+        return [], "http_error"
 
-        if response.status_code == 404:
-            detail = ""
-            try:
-                body = response.json()
-                detail = (body.get("error") or {}).get("message", "") or ""
-            except Exception:
-                pass
-            suffix = f": {detail}" if detail else ""
-            sys.stderr.write(f"No method nodes for shortname {short_name!r} (404){suffix}\n")
-            return [], "not_found"
+    try:
+        body = response.json()
+    except Exception as e:
+        sys.stderr.write(f"Non-JSON shortname search payload for {short_name}: {e}\n")
+        return [], "http_error"
 
-        response.raise_for_status()
-
-        # Cache result
-        nodes = response.json()['data']
+    # Tolerate a missing ``data`` key: a 200 without data is an empty result,
+    # not an infrastructure failure.
+    nodes = body.get('data') or []
+    if nodes:
+        # Cache only non-empty results so transient empties don't stick.
         _method_nodes_cache[cache_key] = (nodes, now + timedelta(seconds=METHOD_CACHE_TTL))
         sys.stderr.write(f"Method nodes cached for {short_name} with TTL {METHOD_CACHE_TTL}s\n")
-        return nodes, None
-    except httpx.TimeoutException as e:
-        sys.stderr.write(f"Timeout error fetching method nodes for {short_name}: {e}\n")
-        return [], "timeout"
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        sys.stderr.write(f"HTTP error {code} fetching method nodes for {short_name}: {e}\n")
-        if code == 504:
-            return [], "gateway_timeout"
-        return [], "http_error"
-    except Exception as e:
-        sys.stderr.write(f"Error fetching method nodes: {e}\n")
-        return [], "http_error"
+    else:
+        sys.stderr.write(f"Empty method node result for {short_name} (200, no data); not cached\n")
+    return nodes, None
 
 
 def extract_relationships(impact_data):
@@ -255,53 +495,213 @@ def extract_relationships(impact_data):
         start_node = find_node_by_id(impact_data['data']['nodes'], rel['startId'])
         end_node = find_node_by_id(impact_data['data']['nodes'], rel['endId'])
         if start_node and end_node:
-            relationship = f"- {start_node['identity']} ({rel['type']}) -> {end_node['identity']}"
+            # Unresolved-reference nodes may carry no top-level identity;
+            # fall back to the (synthetic) name so URs don't break extraction.
+            start_label = start_node.get('identity') or start_node.get('name')
+            end_label = end_node.get('identity') or end_node.get('name')
+            relationship = f"- {start_label} ({rel['type']}) -> {end_label}"
             relationships.append(relationship)
     return relationships
 
 
-def get_impact(id):
+def get_impact(id, mv_id=None):
     """
     Get impact analysis for a node, with caching.
 
     Retrieves the full dependency impact analysis for the specified node ID,
-    caching the results for efficiency on subsequent requests.
+    caching the results for efficiency on subsequent requests. When ``mv_id``
+    is provided it is sent as ``viewId`` so the traversal is scoped to that
+    materialized view (absent means the server decides).
 
     Args:
         id (str): The ID of the node for which to get impact analysis
+        mv_id (str, optional): Materialized view ID to scope the traversal
 
     Returns:
         str: JSON string with impact analysis data
 
     Raises:
-        httpx.HTTPError: If API request fails
+        LineaiApiError: On auth, transport, or HTTP failures.
     """
     now = datetime.now()
+    cache_key = f"{id}:{mv_id}"
 
     # Check cache
-    if id in _impact_cache:
-        impact, expiry = _impact_cache[id]
+    if cache_key in _impact_cache:
+        impact, expiry = _impact_cache[cache_key]
         if now < expiry:
-            sys.stderr.write(f"Impact cache hit for {id}\n")
+            sys.stderr.write(f"Impact cache hit for {cache_key}\n")
             return impact
         else:
-            sys.stderr.write(f"Impact cache expired for {id}\n")
+            sys.stderr.write(f"Impact cache expired for {cache_key}\n")
 
-    token = authenticate()
     url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/dependency/impact/full/{id}/list"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json"
-    }
-    response = _client.get(url, headers=headers)
-    response.raise_for_status()
+    params = {"viewId": mv_id} if mv_id is not None else None
+    response = _authed_request("GET", url, params=params)
+    if response.status_code == 404:
+        raise LineaiApiError(
+            "http_error", status=404,
+            detail=f"Impact endpoint returned 404 for node {id!r}",
+            endpoint=url,
+        )
+    _raise_for_unexpected_status(response, url)
 
     result = strip_unused_properties(response)
 
     # Cache result
-    _impact_cache[id] = (result, now + timedelta(seconds=IMPACT_CACHE_TTL))
-    sys.stderr.write(f"Impact cached for {id} with TTL {IMPACT_CACHE_TTL}s\n")
+    _impact_cache[cache_key] = (result, now + timedelta(seconds=IMPACT_CACHE_TTL))
+    sys.stderr.write(f"Impact cached for {cache_key} with TTL {IMPACT_CACHE_TTL}s\n")
     return result
+
+
+def is_unresolved_reference(node) -> bool:
+    """
+    Detect whether an impact/search node is an unresolved reference (UR).
+
+    URs are per-view nodes materialized for searches that could not be
+    resolved to a concrete node. Tolerates both server conventions:
+    current servers return top-level ``primaryLabel == "SearchNode"`` with
+    ``properties.primaryLabel == "UnresolvedReference"``; normalized servers
+    return ``"UnresolvedReference"`` at the top level.
+
+    Args:
+        node (dict): A node from impact or search data.
+
+    Returns:
+        bool: True when the node is an unresolved reference.
+    """
+    if not isinstance(node, dict):
+        return False
+    properties = node.get('properties') or {}
+    if properties.get('primaryLabel') == 'UnresolvedReference':
+        return True
+    return node.get('primaryLabel') in ('SearchNode', 'UnresolvedReference')
+
+
+def extract_unresolved_references(impact_data):
+    """
+    Extract unresolved references (URs) from impact analysis data.
+
+    For each UR node, returns the sought specification, target labels
+    (per-view ``v-...`` labels filtered out), fuzzy criteria (the server
+    serializes these as a JSON string — parsed defensively), endpoint
+    details (read from both flat ``endpoint.*`` keys and a nested
+    ``endpoint`` object), and the nodes referencing the UR via
+    relationship endpoints.
+
+    Args:
+        impact_data (dict): Parsed impact analysis data.
+
+    Returns:
+        List[Dict]: One dict per unresolved reference; empty when none.
+    """
+    data = impact_data.get('data') or {}
+    nodes = data.get('nodes') or []
+    relationships = data.get('relationships') or []
+    nodes_by_id = {n.get('id'): n for n in nodes if isinstance(n, dict)}
+
+    unresolved = []
+    for node in nodes:
+        if not is_unresolved_reference(node):
+            continue
+        properties = node.get('properties') or {}
+
+        sought = node.get('name') or properties.get('name') or ''
+
+        labels = [
+            label for label in (properties.get('labels') or [])
+            if isinstance(label, str) and not label.startswith('v-') and label != 'UnresolvedReference'
+        ]
+
+        fuzzy = properties.get('fuzzy')
+        if isinstance(fuzzy, str) and fuzzy.strip():
+            try:
+                fuzzy = json.loads(fuzzy)
+            except (ValueError, TypeError):
+                pass  # keep the raw string
+
+        endpoint = {}
+        nested_endpoint = properties.get('endpoint')
+        if isinstance(nested_endpoint, dict):
+            endpoint.update({k: v for k, v in nested_endpoint.items() if v is not None})
+        for key, value in properties.items():
+            if isinstance(key, str) and key.startswith('endpoint.') and value is not None:
+                endpoint[key.split('.', 1)[1]] = value
+
+        node_id = node.get('id')
+        referenced_by = []
+        for rel in relationships:
+            if not isinstance(rel, dict) or rel.get('endId') != node_id:
+                continue
+            source = nodes_by_id.get(rel.get('startId'))
+            if source and not is_unresolved_reference(source):
+                referenced_by.append({
+                    'name': source.get('name'),
+                    'type': source.get('primaryLabel'),
+                    'relationship': rel.get('type'),
+                })
+
+        unresolved.append({
+            'id': node_id,
+            'sought': sought,
+            'target_labels': labels,
+            'identity': properties.get('identity') or node.get('identity'),
+            'fuzzy': fuzzy,
+            'endpoint': endpoint,
+            'query_hash': properties.get('queryHash'),
+            'referenced_by': referenced_by,
+        })
+    return unresolved
+
+
+def _escape_markdown_cell(text) -> str:
+    """Escape pipe characters so synthetic UR names don't break table rows."""
+    return str(text).replace('|', '\\|')
+
+
+def format_unresolved_references_section(unresolved) -> str:
+    """
+    Render unresolved references as a markdown report section.
+
+    Args:
+        unresolved (List[Dict]): Output of ``extract_unresolved_references``.
+
+    Returns:
+        str: The "## Unresolved References" section, or ``""`` when there are
+        none (the section is omitted entirely, which keeps reports unchanged
+        against servers that do not emit URs).
+    """
+    if not unresolved:
+        return ""
+
+    section = "## Unresolved References (dependency indicators)\n\n"
+    section += (
+        "The impact graph contains references that could not be resolved to a concrete node "
+        "inside the analyzed view. The referencing code depends on something outside of — or "
+        "not resolvable in — this view; treat these as real dependencies when assessing risk.\n\n"
+    )
+    section += "| Sought | Target Labels | Endpoint | Referenced By |\n"
+    section += "|--------|---------------|----------|---------------|\n"
+    for ur in unresolved:
+        sought = _escape_markdown_cell(ur.get('sought') or '(unknown)')
+
+        labels = ", ".join(ur.get('target_labels') or []) or "-"
+
+        endpoint = ur.get('endpoint') or {}
+        verb_path = " ".join(str(endpoint[k]) for k in ('httpMethod', 'path') if endpoint.get(k))
+        endpoint_text = verb_path or "; ".join(f"{k}={v}" for k, v in endpoint.items()) or "-"
+
+        refs = ur.get('referenced_by') or []
+        refs_text = "; ".join(
+            f"`{_escape_markdown_cell(r.get('name'))}` ({r.get('type')}, {r.get('relationship')})"
+            for r in refs
+        ) or "-"
+
+        section += (
+            f"| `{sought}` | {_escape_markdown_cell(labels)} | "
+            f"{_escape_markdown_cell(endpoint_text)} | {refs_text} |\n"
+        )
+    return section
 
 
 def strip_unused_properties(response):
@@ -309,7 +709,9 @@ def strip_unused_properties(response):
     Remove unnecessary properties from impact analysis response.
 
     This optimizes the data size by removing fields that aren't needed
-    for analysis.
+    for analysis. Unresolved-reference nodes are left untouched: their
+    properties (synthetic name, labels, fuzzy criteria, endpoint details)
+    carry the information the UR report section is built from.
 
     Args:
         response (httpx.Response): API response with impact analysis data
@@ -321,6 +723,8 @@ def strip_unused_properties(response):
 
     # Strip out specific fields
     for node in data.get('data', {}).get('nodes', []):
+        if is_unresolved_reference(node):
+            continue
         properties = node.get('properties', {})
         properties.pop('agentIds', None)
         properties.pop('sourceScanContextIds', None)
@@ -376,97 +780,133 @@ def authenticate():
         str: Authentication token
 
     Raises:
-        Exception: If authentication fails
+        LineaiApiError: ``auth`` (or ``timeout``) if authentication fails
     """
     global _cached_token, _token_expiry
-    now = datetime.now()
+    with _token_lock:
+        now = datetime.now()
 
-    # Return cached token if still valid
-    if _cached_token is not None and _token_expiry is not None:
-        if now < _token_expiry:
-            sys.stderr.write("Using cached authentication token\n")
+        # Return cached token if still valid
+        if _cached_token is not None and _token_expiry is not None:
+            if now < _token_expiry:
+                sys.stderr.write("Using cached authentication token\n")
+                return _cached_token
+            else:
+                sys.stderr.write("Authentication token expired\n")
+
+        url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/authenticate"
+        data = {
+            "grant_type": "password",
+            "username": os.getenv("LINEAI_USERNAME"),
+            "password": os.getenv("LINEAI_PASSWORD")
+        }
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json"
+        }
+
+        try:
+            response = _client.post(url, data=data, headers=headers)
+            response.raise_for_status()
+            body = response.json()
+            _cached_token = body['access_token']
+
+            # Honor a server-provided expires_in with a safety margin, capped at
+            # the configured TTL. Without expires_in, behavior is unchanged.
+            ttl = TOKEN_CACHE_TTL
+            expires_in = body.get('expires_in')
+            if expires_in is not None:
+                try:
+                    ttl = min(TOKEN_CACHE_TTL, max(int(float(expires_in)) - TOKEN_EXPIRY_MARGIN, 0))
+                except (TypeError, ValueError):
+                    ttl = TOKEN_CACHE_TTL
+
+            _token_expiry = now + timedelta(seconds=ttl)
+            sys.stderr.write(f"New authentication token cached with TTL {ttl}s\n")
             return _cached_token
-        else:
-            sys.stderr.write("Authentication token expired\n")
-
-    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/authenticate"
-    data = {
-        "grant_type": "password",
-        "username": os.getenv("LINEAI_USERNAME"),
-        "password": os.getenv("LINEAI_PASSWORD")
-    }
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json"
-    }
-
-    try:
-        response = _client.post(url, data=data, headers=headers)
-        response.raise_for_status()
-        _cached_token = response.json()['access_token']
-        _token_expiry = now + timedelta(seconds=TOKEN_CACHE_TTL)
-        sys.stderr.write(f"New authentication token cached with TTL {TOKEN_CACHE_TTL}s\n")
-        return _cached_token
-    except Exception as e:
-        sys.stderr.write(f"Authentication error: {e}\n")
-        raise
+        except httpx.TimeoutException as e:
+            sys.stderr.write(f"Authentication timeout: {e}\n")
+            raise LineaiApiError("timeout", detail=str(e), endpoint=url) from e
+        except httpx.HTTPStatusError as e:
+            sys.stderr.write(f"Authentication error: {e}\n")
+            raise LineaiApiError(
+                "auth", status=e.response.status_code,
+                detail=_response_snippet(e.response), endpoint=url,
+            ) from e
+        except LineaiApiError:
+            raise
+        except Exception as e:
+            sys.stderr.write(f"Authentication error: {e}\n")
+            raise LineaiApiError("auth", detail=str(e), endpoint=url) from e
 
 
-async def search_database_entity(entity_type, name, table_or_view=None):
+def search_database_entity(entity_type, name, mv_id, table_or_view=None):
     """
     Search for database entities using the Lineai API.
 
     Args:
         entity_type (str): Type of database entity (table, view, or column)
         name (str): Name of the database entity
+        mv_id (str): Materialized view ID to search in
         table_or_view (str, optional): Name of the table or view containing the column
             (required when entity_type is 'column')
 
     Returns:
-        list: List of matching database entities
+        tuple[list, str | None]: ``(results, error_kind)``. ``results`` is the
+        list of matching entities. ``error_kind`` is ``None`` on success
+        (including an empty result); on failure it is one of ``not_found``,
+        ``timeout``, ``gateway_timeout``, or ``http_error``.
+
+    Raises:
+        LineaiApiError: ``auth`` failures propagate for honest taxonomy rendering.
     """
+    url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/{entity_type}"
+
+    # Create query parameters
+    params = {
+        "materializedViewId": mv_id
+    }
+
+    # Add the appropriate parameter name based on entity type
+    if entity_type == "table":
+        params["tableName"] = name
+    elif entity_type == "column":
+        params["columnName"] = name
+        if table_or_view:
+            params["tableOrViewName"] = table_or_view
+    elif entity_type == "view":
+        params["viewName"] = name
+
+    # Debug output
+    sys.stderr.write(f"Calling {url} with params {params}\n")
+
     try:
-        token = authenticate()
-        url = f"{os.getenv('LINEAI_SERVER_HOST')}/api/ai-retrieval/search/{entity_type}"
-
-        # Get materialized view ID (required parameter)
-        mv_id = get_mv_id(encoded_workspace_name)
-
-        # Create query parameters
-        params = {
-            "materializedViewId": mv_id
-        }
-
-        # Add the appropriate parameter name based on entity type
-        if entity_type == "table":
-            params["tableName"] = name
-        elif entity_type == "column":
-            params["columnName"] = name
-            if table_or_view:
-                params["tableOrViewName"] = table_or_view
-        elif entity_type == "view":
-            params["viewName"] = name
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        }
-
-        # Debug output
-        sys.stderr.write(f"Calling {url} with params {params}\n")
-
         # Use POST as specified in the API
-        response = _client.post(url, headers=headers, params=params, json={})
-        response.raise_for_status()
-        return response.json().get("data", [])
-    except httpx.HTTPStatusError as e:
-        sys.stderr.write(f"HTTP error {e.response.status_code} from API: {e}\n")
-        sys.stderr.write(f"Response content: {e.response.text}\n")
-        return []
+        response = _authed_request("POST", url, params=params, json_body={})
+    except LineaiApiError as e:
+        if e.kind == "auth":
+            raise  # honest auth taxonomy handled by the dispatcher
+        sys.stderr.write(f"Error searching for {entity_type} '{name}': {e}\n")
+        if e.kind == "timeout":
+            return [], "timeout"
+        return [], "http_error"
+
+    if response.status_code == 404:
+        sys.stderr.write(f"No {entity_type} matched '{name}' (404)\n")
+        return [], "not_found"
+    if response.status_code == 504:
+        sys.stderr.write(f"HTTP 504 searching for {entity_type} '{name}'\n")
+        return [], "gateway_timeout"
+    if response.status_code >= 400:
+        sys.stderr.write(f"HTTP error {response.status_code} from API\n")
+        sys.stderr.write(f"Response content: {_response_snippet(response)}\n")
+        return [], "http_error"
+
+    try:
+        return (response.json().get("data") or []), None
     except Exception as e:
-        sys.stderr.write(f"Error searching for {entity_type} '{name}': {str(e)}\n")
-        return []  # Return empty list instead of propagating the error
+        sys.stderr.write(f"Non-JSON search payload for {entity_type} '{name}': {e}\n")
+        return [], "http_error"
 
 
 def process_database_entity_impact(impact_data, entity_type, entity_name, entity_schema):
