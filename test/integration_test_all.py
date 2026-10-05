@@ -132,8 +132,8 @@ class TestUtils(TestCase):
             get_mv_definition_id, get_mv_id_from_def, get_method_nodes, get_impact, authenticate = setup_test_environment(config)[1:6]
             cls.token = authenticate()
             cls.mv_name = os.getenv('LINEAI_WORKSPACE_NAME')
-            cls.mv_def_id = get_mv_definition_id(cls.mv_name, cls.token)
-            cls.mv_id = get_mv_id_from_def(cls.mv_def_id, cls.token)
+            cls.mv_def_id = get_mv_definition_id(cls.mv_name)
+            cls.mv_id = get_mv_id_from_def(cls.mv_def_id)
             cls.nodes, _ = get_method_nodes(cls.mv_id, 'IsValid')
             cls.get_method_nodes = get_method_nodes
             cls.get_impact = get_impact

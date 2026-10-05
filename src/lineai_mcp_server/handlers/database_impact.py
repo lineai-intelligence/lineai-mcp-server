@@ -12,8 +12,8 @@ import os
 import sys
 import time
 import mcp.types as types
-from .common import get_workspace_name, write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
-from ..utils import search_database_entity, get_impact, process_database_entity_impact, generate_combined_database_report
+from .common import write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
+from ..utils import resolve_mv_id, search_database_entity, get_impact, process_database_entity_impact, generate_combined_database_report
 
 
 async def handle_database_impact(arguments: dict | None) -> list[types.TextContent]:
@@ -39,12 +39,12 @@ async def handle_database_impact(arguments: dict | None) -> list[types.TextConte
         sys.stderr.write("Table or view name must be provided for column searches\n")
         raise ValueError("Table or view name must be provided for column searches")
 
-    # Get workspace name from environment variable
-    workspace_name = get_workspace_name()
-    
+    # Resolve the materialized view to search in
+    mv_id = resolve_mv_id(arguments)
+
     # Search for the database entity
     start_time = time.time()
-    search_results = await search_database_entity(entity_type, name, table_or_view)
+    search_results, search_error = search_database_entity(entity_type, name, mv_id, table_or_view)
     end_time = time.time()
     duration = end_time - start_time
     log_timing(f"search_database_entity for {entity_type} '{name}'", duration)

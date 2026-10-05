@@ -344,7 +344,7 @@ class TestImpactCaching(TestCase):
 
         # Set up mock response
         mock_response = mock.MagicMock()
-        mock_response.raise_for_status.return_value = None
+        mock_response.status_code = 200
         mock_response.text = json.dumps({
             'data': {
                 'nodes': [
@@ -367,9 +367,9 @@ class TestImpactCaching(TestCase):
         # Call get_impact
         impact = utils.get_impact('node-123')
 
-        # Verify results are cached and returned
-        self.assertIn('node-123', utils._impact_cache)
-        cached_impact, expiry = utils._impact_cache['node-123']
+        # Verify results are cached and returned (cache key includes the mv id)
+        self.assertIn('node-123:None', utils._impact_cache)
+        cached_impact, expiry = utils._impact_cache['node-123:None']
 
         # Verify the impact data is properly stripped
         impact_data = json.loads(impact)
@@ -382,7 +382,7 @@ class TestImpactCaching(TestCase):
         self.assertEqual(expiry, now + timedelta(seconds=utils.IMPACT_CACHE_TTL))
 
         # Verify logging message
-        self.assertIn(f"Impact cached for node-123 with TTL {utils.IMPACT_CACHE_TTL}s",
+        self.assertIn(f"Impact cached for node-123:None with TTL {utils.IMPACT_CACHE_TTL}s",
                       self.mock_stderr.getvalue())
 
     @mock.patch('lineai_mcp_server.utils.authenticate')
@@ -396,7 +396,7 @@ class TestImpactCaching(TestCase):
 
         # Set up initial cache with data valid for 5 minutes
         cached_data = '{"data": {"nodes": [{"name": "cached_impact"}]}}'
-        utils._impact_cache['node-123'] = (cached_data, now + timedelta(seconds=300))
+        utils._impact_cache['node-123:None'] = (cached_data, now + timedelta(seconds=300))
 
         # Set current time to 1 minute after now (cache still valid)
         mock_datetime.now.return_value = future
@@ -422,7 +422,7 @@ class TestImpactCaching(TestCase):
 
         # Set up expired cache
         cached_data = '{"data": {"nodes": [{"name": "expired_impact"}]}}'
-        utils._impact_cache['node-123'] = (cached_data, now - timedelta(seconds=60))
+        utils._impact_cache['node-123:None'] = (cached_data, now - timedelta(seconds=60))
 
         # Set current time
         mock_datetime.now.return_value = now
@@ -432,7 +432,7 @@ class TestImpactCaching(TestCase):
 
         # Set up mock response
         mock_response = mock.MagicMock()
-        mock_response.raise_for_status.return_value = None
+        mock_response.status_code = 200
         mock_response.text = json.dumps({
             'data': {
                 'nodes': [
