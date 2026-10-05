@@ -4,7 +4,8 @@ An [MCP Server](https://modelcontextprotocol.io/introduction) to utilize Lineai'
 
 ## Documentation
 
-Code-derived architecture documentation lives in [`docs/`](docs/) (added in LIN-737):
+Code-derived architecture documentation lives in [`docs/`](docs/) (added in
+LIN-737; updated for the LIN-699 changes — PR #61 / neo4cape #1860):
 
 - [docs/architecture.md](docs/architecture.md) — full architecture analysis: module map, tool surface and the Lineai `/api/...` endpoints each tool calls, auth flow, caching, error-handling taxonomy, configuration, packaging/release, and findings.
 - [docs/architecture-diagrams.md](docs/architecture-diagrams.md) — Mermaid diagram set (ecosystem, module map, call sequence, auth/caching, error taxonomy).
@@ -18,15 +19,17 @@ The server implements **eight** tools: two impact tools plus six **graph** tools
 
 #### Code Analysis Tools
 - **lineai-method-impact**: Pulls an impact assessment from the Lineai server's APIs for your code.
-  - Takes the given "method" that you're working on and its associated "class".
+  - Takes the given "method" that you're working on; "class" is optional (a case-insensitive filter used when several matches exist).
 - **lineai-database-impact**: Analyzes impacts between code and database entities.
   - Takes the database entity type (column, table, or view) and its name.
+
+All eight tools also accept optional `workspace` and `materialized_view_id` arguments to scope a single call; when neither is given (and `LINEAI_WORKSPACE_NAME` is unset) the server's default workspace's latest materialized view is used automatically.
 
 #### Graph API tools
 
 These call `POST` / `GET` endpoints under `/api/ai-retrieval/graph/` on the same host as `LINEAI_SERVER_HOST`, using the same session auth as other MCP tools. If graph routes are not deployed, the server returns a clear “graph not available” style message (often after HTTP 404).
 
-- **lineai-graph-capabilities**: `GET` — discover supported relationship types, limits, and flags for the workspace materialized view (`materializedViewId` defaults from `LINEAI_WORKSPACE_NAME` like other tools).
+- **lineai-graph-capabilities**: `GET` — discover supported relationship types, limits, and flags for the workspace materialized view (`materializedViewId` resolved like every other tool: explicit id → `workspace` argument → `LINEAI_WORKSPACE_NAME` → server default).
 - **lineai-graph-search**: Search nodes by text `query` / `q` and/or `identity_prefix`; optional `scan_space`, `limit`, etc.
 - **lineai-graph-impact**: Dependency / blast-radius style traversal from `seed_node_ids`.
 - **lineai-graph-path-explain**: Shortest-path style explanation between `from_node_id` and `to_node_id`.
@@ -333,7 +336,7 @@ The following environment variables can be configured to customize the behavior 
 - `LINEAI_SERVER_HOST`: The URL of the Lineai server (required). All API paths (`/api/authenticate`, `/api/ai-retrieval/...`, `/api/dependency/...`, `/api/materialized-view...`) are appended to it.
 - `LINEAI_USERNAME`: Your Lineai username (required).
 - `LINEAI_PASSWORD`: Your Lineai password (required).
-- `LINEAI_WORKSPACE_NAME`: The name of the workspace to use (required in practice — it selects the materialized view every tool searches).
+- `LINEAI_WORKSPACE_NAME`: The default workspace to use. Optional: individual tool calls can override it with `workspace` / `materialized_view_id` arguments, and when nothing is specified at all the server's default workspace's latest materialized view is used.
 - `LINEAI_DEBUG_MODE`: Set to `true` to enable debug mode. When enabled, additional debug files such as `timing_log.txt` and `impact_data*.json` will be generated. Defaults to `false`.
 
 **Tuning (optional — read once at server startup)**
@@ -341,6 +344,7 @@ The following environment variables can be configured to customize the behavior 
 - `LINEAI_TOKEN_CACHE_TTL`: Authentication-token cache lifetime in seconds. Defaults to `3600`.
 - `LINEAI_METHOD_CACHE_TTL`: Method shortname-search result cache lifetime in seconds. Defaults to `300`.
 - `LINEAI_IMPACT_CACHE_TTL`: Impact-analysis result cache lifetime in seconds. Defaults to `300`.
+- `LINEAI_MV_CACHE_TTL`: Materialized-view resolution cache lifetime in seconds (workspace name / server default → view id). Defaults to `300`.
 - `LINEAI_REQUEST_TIMEOUT`: Overall HTTP request timeout in seconds for all Lineai API calls. Defaults to `120.0`.
 - `LINEAI_CONNECT_TIMEOUT`: HTTP connect timeout in seconds. Defaults to `30.0`.
 
