@@ -16,7 +16,7 @@ from .common import get_workspace_name, write_json_to_file, log_timing, DEBUG_MO
 from ..utils import extract_nodes, extract_relationships, get_mv_id, get_method_nodes, get_impact, find_node_by_id, find_api_endpoints
 
 
-async def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
+def handle_method_impact(arguments: dict | None) -> list[types.TextContent]:
     """Handle the lineai-method-impact tool for method/function analysis"""
     if not arguments:
         sys.stderr.write("Missing arguments\n")

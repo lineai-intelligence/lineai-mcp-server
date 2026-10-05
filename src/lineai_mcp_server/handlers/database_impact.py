@@ -16,7 +16,7 @@ from .common import write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
 from ..utils import resolve_mv_id, search_database_entity, get_impact, process_database_entity_impact, generate_combined_database_report
 
 
-async def handle_database_impact(arguments: dict | None) -> list[types.TextContent]:
+def handle_database_impact(arguments: dict | None) -> list[types.TextContent]:
     """Handle the database-impact tool for database entity analysis"""
     if not arguments:
         sys.stderr.write("Missing arguments\n")

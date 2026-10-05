@@ -10,6 +10,8 @@ import unittest
 import test.test_env  # noqa: F401 — apply DEFAULT_TEST_ENV before package imports
 from unittest.mock import patch
 
+import mcp.types as types
+
 from lineai_mcp_server.handlers.graph_tools import (
     handle_lineai_graph_capabilities,
     handle_lineai_graph_impact,
@@ -24,7 +26,7 @@ class TestGraphTools(unittest.TestCase):
             handle_lineai_graph_search({})
 
     @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
-    @patch("lineai_mcp_server.handlers.graph_tools.get_mv_id")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
     def test_search_success(self, mock_mv, mock_gr):
         mock_mv.return_value = "mv-1"
         mock_gr.return_value = ({"hits": [], "status": "ok"}, 200, None, "")
@@ -41,7 +43,7 @@ class TestGraphTools(unittest.TestCase):
         self.assertEqual(body.get("query"), "doThing")
 
     @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
-    @patch("lineai_mcp_server.handlers.graph_tools.get_mv_id")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
     def test_search_uses_identity_prefix(self, mock_mv, mock_gr):
         mock_mv.return_value = "mv-9"
         mock_gr.return_value = ({}, 200, None, "")
@@ -51,13 +53,15 @@ class TestGraphTools(unittest.TestCase):
         self.assertIsNone(body.get("query"))
 
     @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
-    @patch("lineai_mcp_server.handlers.graph_tools.get_mv_id")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
     def test_search_not_deployed(self, mock_mv, mock_gr):
         mock_mv.return_value = "mv-1"
         mock_gr.return_value = (None, 404, "not_deployed", "")
         result = handle_lineai_graph_search({"query": "x"})
-        self.assertIn("Graph API not available", result[0].text)
-        self.assertIn("/graph/search", result[0].text)
+        self.assertIsInstance(result, types.CallToolResult)
+        self.assertTrue(result.isError)
+        self.assertIn("Graph API not available", result.content[0].text)
+        self.assertIn("/graph/search", result.content[0].text)
 
     def test_impact_requires_seeds(self):
         with self.assertRaises(ValueError):
@@ -66,7 +70,7 @@ class TestGraphTools(unittest.TestCase):
             handle_lineai_graph_impact({})
 
     @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
-    @patch("lineai_mcp_server.handlers.graph_tools.get_mv_id")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
     def test_capabilities_get(self, mock_mv, mock_gr):
         mock_mv.return_value = "mv-cap"
         mock_gr.return_value = ({"labels": ["X"]}, 200, None, "")

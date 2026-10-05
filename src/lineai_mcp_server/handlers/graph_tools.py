@@ -18,8 +18,8 @@ from typing import Any
 import mcp.types as types
 
 from ..graph_client import graph_error_message, graph_request
-from ..utils import get_mv_id
-from .common import get_workspace_name
+from ..utils import resolve_mv_id
+from .common import error_result
 
 
 def _require_arguments(arguments: dict | None) -> dict:
@@ -29,14 +29,9 @@ def _require_arguments(arguments: dict | None) -> dict:
 
 
 def _inject_materialized_view_id(body: dict[str, Any], arguments: dict) -> dict[str, Any]:
-    """Add ``materializedViewId`` from args or workspace env (via MV name)."""
+    """Add ``materializedViewId`` resolved via the shared precedence chain."""
     out = dict(body)
-    explicit = arguments.get("materialized_view_id") or arguments.get("materializedViewId")
-    if explicit:
-        out["materializedViewId"] = explicit
-        return out
-    workspace = get_workspace_name()
-    out["materializedViewId"] = get_mv_id(workspace)
+    out["materializedViewId"] = resolve_mv_id(arguments)
     return out
 
 
@@ -49,13 +44,6 @@ def _markdown_json(title: str, payload: Any) -> str:
     return f"# {title}\n\n```json\n{text}\n```\n"
 
 
-def _resolve_materialized_view_id_str(arguments: dict) -> str:
-    explicit = arguments.get("materialized_view_id") or arguments.get("materializedViewId")
-    if explicit:
-        return str(explicit)
-    return str(get_mv_id(get_workspace_name()))
-
-
 def _run_graph_tool(
     tool_name: str,
     path_suffix: str,
@@ -63,17 +51,17 @@ def _run_graph_tool(
     method: str = "POST",
     json_body: dict[str, Any] | None = None,
     query_params: dict[str, Any] | None = None,
-) -> list[types.TextContent]:
+) -> list[types.TextContent] | types.CallToolResult:
     payload, status, kind, snippet = graph_request(
         method, path_suffix, json_body=json_body, query_params=query_params
     )
     if kind is not None:
         msg = graph_error_message(tool_name, path_suffix, kind, status, snippet)
-        return [types.TextContent(type="text", text=msg)]
+        return error_result(msg)
     return [types.TextContent(type="text", text=_markdown_json(tool_name, payload))]
 
 
-def handle_lineai_graph_search(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_search(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     args = _require_arguments(arguments)
     query = (args.get("query") or args.get("q") or "").strip()
     identity_prefix = (args.get("identity_prefix") or "").strip()
@@ -94,7 +82,7 @@ def handle_lineai_graph_search(arguments: dict | None) -> list[types.TextContent
     return _run_graph_tool("lineai-graph-search", "/search", json_body=body)
 
 
-def handle_lineai_graph_impact(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_impact(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     args = _require_arguments(arguments)
     seeds = args.get("seed_node_ids") or args.get("seedNodeIds")
     if not seeds or not isinstance(seeds, list):
@@ -111,7 +99,7 @@ def handle_lineai_graph_impact(arguments: dict | None) -> list[types.TextContent
     return _run_graph_tool("lineai-graph-impact", "/impact", json_body=body)
 
 
-def handle_lineai_graph_path_explain(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_path_explain(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     args = _require_arguments(arguments)
     from_id = args.get("from_node_id") or args.get("fromNodeId")
     to_id = args.get("to_node_id") or args.get("toNodeId")
@@ -129,7 +117,7 @@ def handle_lineai_graph_path_explain(arguments: dict | None) -> list[types.TextC
     return _run_graph_tool("lineai-graph-path-explain", "/path", json_body=body)
 
 
-def handle_lineai_graph_validate_change_scope(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_validate_change_scope(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     args = _require_arguments(arguments)
     seeds = args.get("seed_node_ids") or args.get("seedNodeIds")
     summary = (args.get("proposed_change_summary") or "").strip()
@@ -152,7 +140,7 @@ def handle_lineai_graph_validate_change_scope(arguments: dict | None) -> list[ty
     )
 
 
-def handle_lineai_graph_owners(arguments: dict | None) -> list[types.TextContent]:
+def handle_lineai_graph_owners(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     args = _require_arguments(arguments)
     node_id = args.get("node_id") or args.get("nodeId")
     identity_prefix = args.get("identity_prefix")
@@ -169,11 +157,11 @@ def handle_lineai_graph_owners(arguments: dict | None) -> list[types.TextContent
     return _run_graph_tool("lineai-graph-owners", "/owners", json_body=body)
 
 
-def handle_lineai_graph_capabilities(arguments: dict | None) -> list[types.TextContent]:
-    """Discovery tool (GET); requires ``materializedViewId`` (query) — default from workspace MV."""
+def handle_lineai_graph_capabilities(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
+    """Discovery tool (GET); ``materializedViewId`` resolved via the shared precedence chain."""
     if arguments is None:
         arguments = {}
-    mv = _resolve_materialized_view_id_str(arguments)
+    mv = str(resolve_mv_id(arguments))
     return _run_graph_tool(
         "lineai-graph-capabilities",
         "/capabilities",
@@ -193,7 +181,7 @@ GRAPH_TOOL_DISPATCH = {
 }
 
 
-def handle_graph_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+def handle_graph_tool(name: str, arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:
     fn = GRAPH_TOOL_DISPATCH.get(name)
     if not fn:
         raise ValueError(f"Unknown graph tool: {name}")

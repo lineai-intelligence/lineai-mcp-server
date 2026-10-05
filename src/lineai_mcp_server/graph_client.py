@@ -19,7 +19,7 @@ from typing import Any, Literal, Optional
 
 import httpx
 
-from .utils import authenticate, _client
+from . import utils
 
 GraphErrorKind = Optional[
     Literal["not_deployed", "timeout", "gateway_timeout", "http_error", "invalid_json"]
@@ -84,39 +84,33 @@ def graph_request(
         path_suffix = "/" + path_suffix
 
     url = f"{base}{_GRAPH_REL_PREFIX}{path_suffix}"
-    token = authenticate()
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    }
-    if json_body is not None:
-        headers["Content-Type"] = "application/json"
 
     params: dict[str, str] | None = None
     if query_params:
         params = {k: str(v) for k, v in query_params.items() if v is not None}
 
+    m = method.upper()
+    if m not in ("GET", "POST"):
+        return None, 0, "http_error", f"Unsupported HTTP method: {method}"
+
     sys.stderr.write(f"Graph API {method} {url}\n")
     try:
-        m = method.upper()
+        # Auth headers (and the one-shot 401 retry) live in utils._authed_request.
         if m == "GET":
-            response = _client.get(url, headers=headers, params=params)
-        elif m == "POST":
-            response = _client.post(
-                url,
-                headers=headers,
-                params=params,
-                json=json_body if json_body is not None else {},
-            )
+            response = utils._authed_request("GET", url, params=params)
         else:
-            return None, 0, "http_error", f"Unsupported HTTP method: {method}"
+            response = utils._authed_request(
+                "POST", url, params=params,
+                json_body=json_body if json_body is not None else {},
+            )
         return _graph_response_tuple(response)
-    except httpx.TimeoutException as e:
-        sys.stderr.write(f"Graph API timeout: {e}\n")
-        return None, 0, "timeout", str(e)
-    except httpx.HTTPError as e:
-        sys.stderr.write(f"Graph API HTTP error: {e}\n")
-        return None, 0, "http_error", str(e)
+    except utils.LineaiApiError as e:
+        if e.kind == "auth":
+            raise  # honest auth taxonomy handled by the dispatcher
+        sys.stderr.write(f"Graph API error: {e}\n")
+        if e.kind == "timeout":
+            return None, 0, "timeout", str(e)
+        return None, e.status or 0, "http_error", e.detail or str(e)
 
 
 def graph_not_deployed_message(tool_name: str, path_suffix: str, status_code: int, snippet: str) -> str:
