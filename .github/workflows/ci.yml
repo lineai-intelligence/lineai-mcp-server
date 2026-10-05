@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.13]
+        python-version: [3.13, 3.14]
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -25,7 +25,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip -q
         python -m pip install uv -q
-        uv pip install --system -e ".[dev]" --quiet
+        # The project has no [dev] extra (dev tools live in [dependency-groups]);
+        # install the package itself and the dev group explicitly.
+        uv pip install --system -e . --group dev --quiet
         python -m pip install flake8 -q
     - name: Lint with flake8
       run: |

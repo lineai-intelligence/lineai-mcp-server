@@ -17,34 +17,40 @@ import sys
 import httpx
 import json
 import threading
-import toml
 from datetime import datetime, timedelta
+from importlib import metadata as importlib_metadata
 from typing import Dict, Any, List
 
 def get_package_version() -> str:
     """
-    Get the package version from pyproject.toml.
-    
+    Get the installed package version.
+
+    Uses ``importlib.metadata`` (works for any install mode, including uvx);
+    falls back to reading pyproject.toml for in-repo source checkouts, and to
+    "0.0.0" when neither source is available.
+
     Returns:
-        str: The package version from pyproject.toml
-        
-    Raises:
-        FileNotFoundError: If pyproject.toml cannot be found
-        KeyError: If version cannot be found in pyproject.toml
+        str: The package version
     """
     try:
-        # Get the directory containing this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
+        return importlib_metadata.version("lineai-mcp-server")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    except Exception as e:
+        sys.stderr.write(f"Warning: Could not read version from package metadata: {e}\n")
+
+    try:
+        import tomllib
         # Go up to the project root (where pyproject.toml is)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(os.path.dirname(current_dir))
         pyproject_path = os.path.join(project_root, 'pyproject.toml')
-        
-        with open(pyproject_path, 'r') as f:
-            config = toml.load(f)
+        with open(pyproject_path, 'rb') as f:
+            config = tomllib.load(f)
             return config['project']['version']
     except Exception as e:
-        print(f"Warning: Could not read version from pyproject.toml: {e}", file=sys.stderr)
-        return "0.0.0"  # Fallback version if we can't read pyproject.toml
+        sys.stderr.write(f"Warning: Could not read version from pyproject.toml: {e}\n")
+        return "0.0.0"  # Fallback version if we can't determine the version
 
 # Cache TTL settings from environment variables (in seconds)
 TOKEN_CACHE_TTL = int(os.getenv('LINEAI_TOKEN_CACHE_TTL', '3600'))  # Default 1 hour
