@@ -683,6 +683,38 @@ class TestAuthedRequest(TestCase):
         self.assertEqual(ctx.exception.status, 401)
         self.assertEqual(mock_get.call_count, 2)  # exactly one retry, no loop
 
+    @mock.patch('lineai_mcp_server.utils.invalidate_token')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    def test_single_403_retries_once_with_fresh_token(self, mock_get, mock_auth, mock_invalidate):
+        # The Lineai server answers bad/expired tokens with 403, not 401
+        # (verified live during LIN-699 e2e) — the retry must cover it too.
+        mock_auth.side_effect = ['stale-token', 'fresh-token']
+        ok = _mock_response(200, {'data': 'fine'})
+        mock_get.side_effect = [_mock_response(403), ok]
+
+        response = utils._authed_request('GET', 'https://example.lineai.test/api/x')
+
+        self.assertIs(response, ok)
+        self.assertEqual(mock_get.call_count, 2)
+        mock_invalidate.assert_called_once()
+        second_headers = mock_get.call_args_list[1].kwargs['headers']
+        self.assertEqual(second_headers['Authorization'], 'Bearer fresh-token')
+
+    @mock.patch('lineai_mcp_server.utils.invalidate_token')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    def test_persistent_403_raises_auth_without_looping(self, mock_get, mock_auth, mock_invalidate):
+        mock_auth.return_value = 'token'
+        mock_get.side_effect = [_mock_response(403), _mock_response(403)]
+
+        with self.assertRaises(utils.LineaiApiError) as ctx:
+            utils._authed_request('GET', 'https://example.lineai.test/api/x')
+
+        self.assertEqual(ctx.exception.kind, 'auth')
+        self.assertEqual(ctx.exception.status, 403)
+        self.assertEqual(mock_get.call_count, 2)  # exactly one retry, no loop
+
     @mock.patch('lineai_mcp_server.utils.authenticate')
     @mock.patch('lineai_mcp_server.utils._client.get')
     def test_timeout_maps_to_lineai_api_error(self, mock_get, mock_auth):

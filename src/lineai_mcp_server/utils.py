@@ -152,10 +152,13 @@ def _authed_request(method, url, *, params=None, json_body=None, data=None, head
     """
     Perform an authenticated HTTP request against the Lineai server.
 
-    This is the ONLY place that attaches auth headers. On a 401 response the
-    cached token is invalidated and the request retried exactly once with a
-    fresh token; a second 401 raises ``LineaiApiError('auth')``. Transport
-    errors are mapped to ``LineaiApiError`` (``timeout`` / ``http_error``).
+    This is the ONLY place that attaches auth headers. On a 401 or 403
+    response the cached token is invalidated and the request retried exactly
+    once with a fresh token; a second 401/403 raises ``LineaiApiError('auth')``.
+    (The Lineai server answers bad or expired tokens with 403, not 401 —
+    verified live during LIN-699 e2e — so both are treated as auth failures.)
+    Transport errors are mapped to ``LineaiApiError`` (``timeout`` /
+    ``http_error``).
 
     Args:
         method (str): ``GET`` or ``POST``.
@@ -196,13 +199,15 @@ def _authed_request(method, url, *, params=None, json_body=None, data=None, head
         except httpx.HTTPError as e:
             raise LineaiApiError("http_error", detail=str(e), endpoint=url) from e
 
-        if response.status_code == 401 and attempt == 1:
-            sys.stderr.write(f"401 from {url}; invalidating cached token and retrying once\n")
+        if response.status_code in (401, 403) and attempt == 1:
+            sys.stderr.write(
+                f"{response.status_code} from {url}; invalidating cached token and retrying once\n"
+            )
             invalidate_token()
             continue
-        if response.status_code == 401:
+        if response.status_code in (401, 403):
             raise LineaiApiError(
-                "auth", status=401,
+                "auth", status=response.status_code,
                 detail="Authentication rejected after a token refresh",
                 endpoint=url,
             )
