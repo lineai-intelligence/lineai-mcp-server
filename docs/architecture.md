@@ -454,3 +454,35 @@ server restart.
     round-trips (`materialized-view-definition/name` + `materialized-view/latest`)
     even when the method-nodes and impact caches hit — the workspace→MV mapping is
     the most stable value in the system and the only uncached one.
+
+---
+
+## Appendix A — Tool → Lineai (neo4cape) endpoint mapping
+
+Consolidated map of every HTTP call this server makes, with the neo4cape handler
+behind each one (verified in the neo4cape source, `integration` branch,
+`neo4cape-service/src/main/java/com/codelogic/neo4cape/service/`). The Spring
+controllers map paths *without* the `/api` prefix (e.g. `@RequestMapping("/ai-retrieval")`);
+the public `/api/...` prefix this server calls is added by the deployment's routing
+layer (see this repo's commit `940ac95`, which routed the legacy
+`/codelogic/server` paths to `/api`). All endpoints except `/api/authenticate`
+require the bearer token (`@PreAuthorize` admin-or-user).
+
+| MCP tool | Endpoint (public path) | neo4cape handler | Notes |
+|---|---|---|---|
+| all tools (auth) | `POST /api/authenticate` | `AuthController.loginUser` → `AuthService.authenticate` | Form-encoded username/password (the client's extra `grant_type` field is ignored by `LoginRequest`); token cached client-side, `LINEAI_TOKEN_CACHE_TTL` 3600 s (§5) |
+| all tools (MV resolution, step 1) | `GET /api/materialized-view-definition/name?name=` | `MaterializedViewDefinitionController.getMaterializedViewDefinitionByName` → `MaterializedViewDefinitionService` | Workspace name → MV definition; uncached on the MCP side (finding 12); errors bypass the taxonomy (§7.3) |
+| all tools (MV resolution, step 2) | `GET /api/materialized-view/latest?definitionId=` | `MaterializedViewController.getLatestMaterializedViewByDefinitionId` → `MaterializedViewService.getLatestMaterializedViewObject` | Definition id → latest MV id; same caching/error caveats as step 1 |
+| `lineai-method-impact` | `POST /api/ai-retrieval/search/shortname` | `AIRetrievalController.searchByShortname` → `AIRetrievalServiceImpl.findByShortname` → `BaseNodeSearchRepositoryCustomImpl.findNodesByShortname` | Exact `shortName` match on method-entity nodes in the MV; 404 on zero rows. Cached per `mv_id:short_name`, `LINEAI_METHOD_CACHE_TTL` 300 s; maps to §7.1 error kinds (`not_found`/`timeout`/`gateway_timeout`/`http_error`; LIN-699 wording) |
+| `lineai-database-impact` | `POST /api/ai-retrieval/search/{table\|column\|view}` | `AIRetrievalController.searchForTableNodes` / `searchForColumnNodes` / `searchForViewNodes` → `AIRetrievalServiceImpl.find{Table,Column,View}Nodes…` (same repository) | Uncached; all client-side errors swallowed to `[]` (§7.3, finding 2) |
+| `lineai-method-impact`, `lineai-database-impact` | `GET /api/dependency/impact/full/{id}/list` | `DependencyController.findDependencyImpact2` → `ImpactService.getImpactData` | Full incoming-relationship chain for the node. Cached per node id, `LINEAI_IMPACT_CACHE_TTL` 300 s; errors bypass the taxonomy (§7.3). The controller's optional `viewId` query param is not sent by this client |
+| `lineai-graph-capabilities` | `GET /api/ai-retrieval/graph/capabilities?materializedViewId=` | `AIGraphMcpController.capabilities` → `AIGraphMcpServiceImpl` | Graph tier; uncached; §7.2 error kinds (404 → `not_deployed`) |
+| `lineai-graph-search` | `POST /api/ai-retrieval/graph/search` | `AIGraphMcpController.search` → `AIGraphMcpServiceImpl.search` | camelCase body; uncached; §7.2 |
+| `lineai-graph-impact` | `POST /api/ai-retrieval/graph/impact` | `AIGraphMcpController.impact` → `AIGraphMcpServiceImpl.impact` | "Impact subgraph from seed node ids (merged, capped)"; uncached; §7.2 |
+| `lineai-graph-path-explain` | `POST /api/ai-retrieval/graph/path` | `AIGraphMcpController.path` → `AIGraphMcpServiceImpl.path` | Shortest path within the MV; uncached; §7.2 |
+| `lineai-graph-validate-change-scope` | `POST /api/ai-retrieval/graph/validate-change-scope` | `AIGraphMcpController.validateChangeScope` → `AIGraphMcpServiceImpl.validateChangeScope` | Deterministic heuristics per the controller's `@Operation` summary; uncached; §7.2 |
+| `lineai-graph-owners` | `POST /api/ai-retrieval/graph/owners` | `AIGraphMcpController.owners` → `AIGraphMcpServiceImpl.owners` | "Owner-like fields from node properties (best-effort)"; uncached; §7.2 |
+
+For the full neo4cape API surface see neo4cape's
+`docs/neo4cape-architecture/LINEAI-API-REFERENCE.md` (renamed from
+`CODELOGIC-API-REFERENCE.md` in neo4cape PR #1857; a July 2026 snapshot).
