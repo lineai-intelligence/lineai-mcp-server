@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest import mock
 from unittest.mock import Mock
@@ -585,6 +586,398 @@ class TestFindApiEndpoints(unittest.TestCase):
         self.assertEqual(len(endpoint_dependencies), 1)
         self.assertEqual(endpoint_dependencies[0]['source'], 'UsersEndpoint')
         self.assertEqual(endpoint_dependencies[0]['target'], 'OrdersEndpoint')
+
+
+def _mock_response(status_code=200, json_data=None, text=None):
+    """Build a mock httpx response with a real integer status code."""
+    response = mock.MagicMock()
+    response.status_code = status_code
+    if json_data is not None:
+        response.json.return_value = json_data
+        response.text = json.dumps(json_data)
+    if text is not None:
+        response.text = text
+    return response
+
+
+class TestTokenExpiresIn(TestCase):
+    """authenticate() must honor a server-provided expires_in with a margin."""
+
+    def setUp(self):
+        super().setUp()
+        utils._cached_token = None
+        utils._token_expiry = None
+
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
+    def test_expires_in_applies_margin(self, mock_datetime, mock_post):
+        now = datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.now.return_value = now
+        # DEFAULT_TEST_ENV pins LINEAI_TOKEN_CACHE_TTL=60, so use a shorter
+        # expires_in to observe the margin below the cap.
+        mock_post.return_value = _mock_response(
+            200, {'access_token': 'tok', 'token_type': 'bearer', 'expires_in': 50})
+
+        token = utils.authenticate()
+
+        self.assertEqual(token, 'tok')
+        self.assertEqual(utils._token_expiry,
+                         now + timedelta(seconds=50 - utils.TOKEN_EXPIRY_MARGIN))
+
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
+    def test_expires_in_capped_at_configured_ttl(self, mock_datetime, mock_post):
+        now = datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.now.return_value = now
+        mock_post.return_value = _mock_response(
+            200, {'access_token': 'tok', 'expires_in': 999999})
+
+        utils.authenticate()
+
+        self.assertEqual(utils._token_expiry,
+                         now + timedelta(seconds=utils.TOKEN_CACHE_TTL))
+
+    @mock.patch('lineai_mcp_server.utils._client.post')
+    @mock.patch('lineai_mcp_server.utils.datetime')
+    def test_tiny_expires_in_floors_at_zero(self, mock_datetime, mock_post):
+        now = datetime(2023, 1, 1, 12, 0, 0)
+        mock_datetime.now.return_value = now
+        mock_post.return_value = _mock_response(
+            200, {'access_token': 'tok', 'expires_in': 10})
+
+        utils.authenticate()
+
+        self.assertEqual(utils._token_expiry, now)  # 10s - 30s margin floors at 0
+
+
+class TestAuthedRequest(TestCase):
+    """_authed_request: 401 invalidate-retry and transport error mapping."""
+
+    @mock.patch('lineai_mcp_server.utils.invalidate_token')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    def test_single_401_retries_once_with_fresh_token(self, mock_get, mock_auth, mock_invalidate):
+        mock_auth.side_effect = ['stale-token', 'fresh-token']
+        ok = _mock_response(200, {'data': 'fine'})
+        mock_get.side_effect = [_mock_response(401), ok]
+
+        response = utils._authed_request('GET', 'https://example.lineai.test/api/x')
+
+        self.assertIs(response, ok)
+        self.assertEqual(mock_get.call_count, 2)
+        mock_invalidate.assert_called_once()
+        second_headers = mock_get.call_args_list[1].kwargs['headers']
+        self.assertEqual(second_headers['Authorization'], 'Bearer fresh-token')
+
+    @mock.patch('lineai_mcp_server.utils.invalidate_token')
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    def test_persistent_401_raises_auth_without_looping(self, mock_get, mock_auth, mock_invalidate):
+        mock_auth.return_value = 'token'
+        mock_get.side_effect = [_mock_response(401), _mock_response(401)]
+
+        with self.assertRaises(utils.LineaiApiError) as ctx:
+            utils._authed_request('GET', 'https://example.lineai.test/api/x')
+
+        self.assertEqual(ctx.exception.kind, 'auth')
+        self.assertEqual(ctx.exception.status, 401)
+        self.assertEqual(mock_get.call_count, 2)  # exactly one retry, no loop
+
+    @mock.patch('lineai_mcp_server.utils.authenticate')
+    @mock.patch('lineai_mcp_server.utils._client.get')
+    def test_timeout_maps_to_lineai_api_error(self, mock_get, mock_auth):
+        mock_auth.return_value = 'token'
+        mock_get.side_effect = utils.httpx.ConnectTimeout('boom')
+
+        with self.assertRaises(utils.LineaiApiError) as ctx:
+            utils._authed_request('GET', 'https://example.lineai.test/api/x')
+
+        self.assertEqual(ctx.exception.kind, 'timeout')
+
+
+class TestResolveMvId(TestCase):
+    """resolve_mv_id precedence: explicit id -> workspace arg -> env -> server default."""
+
+    @mock.patch('lineai_mcp_server.utils.get_default_mv_id')
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_explicit_snake_case_id_wins(self, mock_get_mv_id, mock_default):
+        result = utils.resolve_mv_id({'materialized_view_id': 'mv-explicit', 'workspace': 'ignored'})
+        self.assertEqual(result, 'mv-explicit')
+        mock_get_mv_id.assert_not_called()
+        mock_default.assert_not_called()
+
+    @mock.patch('lineai_mcp_server.utils.get_default_mv_id')
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_explicit_camel_case_id_wins(self, mock_get_mv_id, mock_default):
+        result = utils.resolve_mv_id({'materializedViewId': 'mv-camel'})
+        self.assertEqual(result, 'mv-camel')
+        mock_get_mv_id.assert_not_called()
+        mock_default.assert_not_called()
+
+    @mock.patch('lineai_mcp_server.utils.get_default_mv_id')
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_workspace_argument_overrides_env(self, mock_get_mv_id, mock_default):
+        mock_get_mv_id.return_value = 'mv-from-arg'
+        result = utils.resolve_mv_id({'workspace': 'Arg Workspace'})
+        self.assertEqual(result, 'mv-from-arg')
+        mock_get_mv_id.assert_called_once_with('Arg Workspace')
+        mock_default.assert_not_called()
+
+    @mock.patch('lineai_mcp_server.utils.get_default_mv_id')
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_env_workspace_used_when_no_arguments(self, mock_get_mv_id, mock_default):
+        mock_get_mv_id.return_value = 'mv-from-env'
+        result = utils.resolve_mv_id(None)  # DEFAULT_TEST_ENV sets LINEAI_WORKSPACE_NAME
+        self.assertEqual(result, 'mv-from-env')
+        mock_get_mv_id.assert_called_once_with('test_workspace')
+        mock_default.assert_not_called()
+
+    @mock.patch('lineai_mcp_server.utils.get_default_mv_id')
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_server_default_when_nothing_specified(self, mock_get_mv_id, mock_default):
+        del os.environ['LINEAI_WORKSPACE_NAME']
+        mock_default.return_value = 'mv-default'
+        result = utils.resolve_mv_id({})
+        self.assertEqual(result, 'mv-default')
+        mock_default.assert_called_once()
+        mock_get_mv_id.assert_not_called()
+
+    @mock.patch('lineai_mcp_server.utils.get_mv_id')
+    def test_name_resolution_is_cached(self, mock_get_mv_id):
+        mock_get_mv_id.return_value = 'mv-cached'
+        first = utils.resolve_mv_id({'workspace': 'WS'})
+        second = utils.resolve_mv_id({'workspace': 'WS'})
+        self.assertEqual(first, 'mv-cached')
+        self.assertEqual(second, 'mv-cached')
+        mock_get_mv_id.assert_called_once()
+
+
+class TestDefaultMvId(TestCase):
+    """GET /api/materialized-view/default returns the id as a bare data value."""
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_bare_id_payload(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'status': 'success', 'data': 123456789})
+        self.assertEqual(utils.get_default_mv_id(), '123456789')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_404_maps_to_mv_no_default(self, mock_request):
+        mock_request.return_value = _mock_response(404, {'status': 'error'})
+        with self.assertRaises(utils.LineaiApiError) as ctx:
+            utils.get_default_mv_id()
+        self.assertEqual(ctx.exception.kind, 'mv_no_default')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_mv_name_404_maps_to_mv_not_found(self, mock_request):
+        mock_request.return_value = _mock_response(404, {'status': 'error'})
+        with self.assertRaises(utils.LineaiApiError) as ctx:
+            utils.get_mv_definition_id('nope')
+        self.assertEqual(ctx.exception.kind, 'mv_not_found')
+
+
+class TestGetImpactViewId(TestCase):
+    """get_impact sends viewId and keys its cache on id:mv_id."""
+
+    def setUp(self):
+        super().setUp()
+        utils._impact_cache = {}
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_view_id_param_and_cache_key(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'data': {'nodes': []}})
+
+        utils.get_impact('node-9', 'mv-7')
+
+        _args, kwargs = mock_request.call_args
+        self.assertEqual(kwargs['params'], {'viewId': 'mv-7'})
+        self.assertIn('node-9:mv-7', utils._impact_cache)
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_no_view_id_sends_no_params(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'data': {'nodes': []}})
+
+        utils.get_impact('node-9')
+
+        _args, kwargs = mock_request.call_args
+        self.assertIsNone(kwargs['params'])
+        self.assertIn('node-9:None', utils._impact_cache)
+
+
+class TestGetMethodNodesEmpty(TestCase):
+    """Empty and malformed 200s are empty results — and are not cached."""
+
+    def setUp(self):
+        super().setUp()
+        utils._method_nodes_cache = {}
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_empty_200_is_success_and_not_cached(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'data': []})
+
+        nodes, err = utils.get_method_nodes('mv-1', 'ghost')
+
+        self.assertEqual(nodes, [])
+        self.assertIsNone(err)
+        self.assertEqual(utils._method_nodes_cache, {})
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_missing_data_key_is_empty_success(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'status': 'success'})
+
+        nodes, err = utils.get_method_nodes('mv-1', 'ghost')
+
+        self.assertEqual(nodes, [])
+        self.assertIsNone(err)
+
+
+class TestSearchDatabaseEntityErrors(TestCase):
+    """search_database_entity returns (results, error_kind) instead of swallowing."""
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_success_returns_data_and_none(self, mock_request):
+        mock_request.return_value = _mock_response(200, {'data': [{'id': 't1', 'name': 'ORDERS'}]})
+        results, err = utils.search_database_entity('table', 'ORDERS', 'mv-1')
+        self.assertEqual(results, [{'id': 't1', 'name': 'ORDERS'}])
+        self.assertIsNone(err)
+        _args, kwargs = mock_request.call_args
+        self.assertEqual(kwargs['params']['materializedViewId'], 'mv-1')
+        self.assertEqual(kwargs['params']['tableName'], 'ORDERS')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_404_is_not_found(self, mock_request):
+        mock_request.return_value = _mock_response(404)
+        results, err = utils.search_database_entity('table', 'NOPE', 'mv-1')
+        self.assertEqual(results, [])
+        self.assertEqual(err, 'not_found')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_504_is_gateway_timeout(self, mock_request):
+        mock_request.return_value = _mock_response(504)
+        results, err = utils.search_database_entity('view', 'V', 'mv-1')
+        self.assertEqual(results, [])
+        self.assertEqual(err, 'gateway_timeout')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_500_is_http_error(self, mock_request):
+        mock_request.return_value = _mock_response(500)
+        results, err = utils.search_database_entity('column', 'C', 'mv-1', 'T')
+        self.assertEqual(results, [])
+        self.assertEqual(err, 'http_error')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_transport_timeout_is_timeout(self, mock_request):
+        mock_request.side_effect = utils.LineaiApiError('timeout', detail='slow')
+        results, err = utils.search_database_entity('table', 'T', 'mv-1')
+        self.assertEqual(results, [])
+        self.assertEqual(err, 'timeout')
+
+    @mock.patch('lineai_mcp_server.utils._authed_request')
+    def test_auth_error_propagates(self, mock_request):
+        mock_request.side_effect = utils.LineaiApiError('auth', status=401)
+        with self.assertRaises(utils.LineaiApiError):
+            utils.search_database_entity('table', 'T', 'mv-1')
+
+
+# Real-shaped UR fixture: top-level SearchNode, properties carry the UR data,
+# fuzzy is a JSON *string*, labels include the per-view "v-..." label, endpoint
+# fields appear as flat "endpoint."-prefixed keys, relationship id is "null".
+UR_NODE = {
+    'id': 'ur-1',
+    'name': '[MethodEntity] identity EQUALS com.acme|Widget|doThing()',
+    'primaryLabel': 'SearchNode',
+    'properties': {
+        'primaryLabel': 'UnresolvedReference',
+        'fuzzy': '{"shortName": "doThing"}',
+        'labels': ['MethodEntity', 'v-42'],
+        'queryHash': 'qh-1',
+        'materializedViewId': 42,
+        'id': 'ur-1',
+        'name': '[MethodEntity] identity EQUALS com.acme|Widget|doThing()',
+        'endpoint.httpMethod': 'GET',
+        'endpoint.path': '/widgets',
+    },
+}
+
+CALLER_NODE = {
+    'id': 'n-1',
+    'name': 'caller',
+    'identity': 'com.acme|Caller|caller()',
+    'primaryLabel': 'JavaMethodEntity',
+    'properties': {},
+}
+
+UR_IMPACT_DATA = {
+    'data': {
+        'nodes': [CALLER_NODE, UR_NODE],
+        'relationships': [
+            {'startId': 'n-1', 'endId': 'ur-1', 'type': 'INVOKES_METHOD',
+             'id': 'null', 'contains': False, 'group': False},
+        ],
+    }
+}
+
+
+class TestUnresolvedReferences(unittest.TestCase):
+    """UR detection, extraction, strip-skip, and rendering."""
+
+    def test_is_unresolved_reference_search_node_convention(self):
+        self.assertTrue(utils.is_unresolved_reference(UR_NODE))
+
+    def test_is_unresolved_reference_normalized_convention(self):
+        node = {'id': 'x', 'primaryLabel': 'UnresolvedReference', 'properties': {}}
+        self.assertTrue(utils.is_unresolved_reference(node))
+
+    def test_is_unresolved_reference_regular_node(self):
+        self.assertFalse(utils.is_unresolved_reference(CALLER_NODE))
+
+    def test_extract_unresolved_references(self):
+        urs = utils.extract_unresolved_references(UR_IMPACT_DATA)
+        self.assertEqual(len(urs), 1)
+        ur = urs[0]
+        self.assertEqual(ur['sought'], '[MethodEntity] identity EQUALS com.acme|Widget|doThing()')
+        self.assertEqual(ur['target_labels'], ['MethodEntity'])  # v-42 filtered out
+        self.assertEqual(ur['fuzzy'], {'shortName': 'doThing'})  # JSON string parsed
+        self.assertEqual(ur['endpoint'], {'httpMethod': 'GET', 'path': '/widgets'})
+        self.assertEqual(ur['referenced_by'],
+                         [{'name': 'caller', 'type': 'JavaMethodEntity', 'relationship': 'INVOKES_METHOD'}])
+
+    def test_extract_tolerates_unparseable_fuzzy_and_nested_endpoint(self):
+        node = json.loads(json.dumps(UR_NODE))
+        node['properties']['fuzzy'] = 'not json'
+        del node['properties']['endpoint.httpMethod']
+        del node['properties']['endpoint.path']
+        node['properties']['endpoint'] = {'httpMethod': 'POST', 'path': '/x', 'host': None}
+        urs = utils.extract_unresolved_references({'data': {'nodes': [node], 'relationships': []}})
+        self.assertEqual(urs[0]['fuzzy'], 'not json')
+        self.assertEqual(urs[0]['endpoint'], {'httpMethod': 'POST', 'path': '/x'})
+        self.assertEqual(urs[0]['referenced_by'], [])
+
+    def test_extract_returns_empty_without_urs(self):
+        data = {'data': {'nodes': [CALLER_NODE], 'relationships': []}}
+        self.assertEqual(utils.extract_unresolved_references(data), [])
+
+    def test_strip_unused_properties_skips_ur_nodes(self):
+        response = Mock()
+        response.text = json.dumps(UR_IMPACT_DATA)
+        stripped = json.loads(utils.strip_unused_properties(response))
+        nodes = {n['id']: n for n in stripped['data']['nodes']}
+        # UR node keeps its report-relevant properties
+        self.assertEqual(nodes['ur-1']['properties']['id'], 'ur-1')
+        self.assertIn('name', nodes['ur-1']['properties'])
+        self.assertIn('fuzzy', nodes['ur-1']['properties'])
+
+    def test_format_section_renders_table(self):
+        urs = utils.extract_unresolved_references(UR_IMPACT_DATA)
+        section = utils.format_unresolved_references_section(urs)
+        self.assertIn('## Unresolved References (dependency indicators)', section)
+        self.assertIn('GET /widgets', section)
+        self.assertIn('MethodEntity', section)
+        self.assertIn('INVOKES_METHOD', section)
+        # pipes in the synthetic name must be escaped for the markdown table
+        self.assertIn('com.acme\\|Widget\\|doThing()', section)
+
+    def test_format_section_empty_when_none(self):
+        self.assertEqual(utils.format_unresolved_references_section([]), "")
 
 
 if __name__ == '__main__':

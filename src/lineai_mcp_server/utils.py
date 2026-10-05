@@ -490,7 +490,11 @@ def extract_relationships(impact_data):
         start_node = find_node_by_id(impact_data['data']['nodes'], rel['startId'])
         end_node = find_node_by_id(impact_data['data']['nodes'], rel['endId'])
         if start_node and end_node:
-            relationship = f"- {start_node['identity']} ({rel['type']}) -> {end_node['identity']}"
+            # Unresolved-reference nodes may carry no top-level identity;
+            # fall back to the (synthetic) name so URs don't break extraction.
+            start_label = start_node.get('identity') or start_node.get('name')
+            end_label = end_node.get('identity') or end_node.get('name')
+            relationship = f"- {start_label} ({rel['type']}) -> {end_label}"
             relationships.append(relationship)
     return relationships
 
