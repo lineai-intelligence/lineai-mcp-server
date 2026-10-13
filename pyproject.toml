@@ -1,6 +1,6 @@
 [project]
 name = "lineai-mcp-server"
-version = "1.3.2"
+version = "1.4.0"
 description = "Integrates Lineai's powerful codebase knowledge graphs with a Model Context Protocol (MCP) server"
 readme = "README.md"
 license = "MPL-2.0"
