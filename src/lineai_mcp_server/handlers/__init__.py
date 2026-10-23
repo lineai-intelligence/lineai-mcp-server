@@ -49,6 +49,13 @@ async def handle_list_tools() -> list[types.Tool]:
             name="lineai-method-impact",
             description="Analyze impacts of modifying a specific method within a given class or type.\n"
                         f"{_SCOPE_NOTE}\n"
+                        "Pass the FULLY-QUALIFIED class name in `class` (e.g. `com.acme.shell.AnalyzeCommands`) "
+                        "whenever the simple name may exist in several repositories: a fully-qualified `class` "
+                        "selects exactly that class; a simple name that matches several classes returns an "
+                        "ambiguity page listing the candidates instead of silently analyzing another repository's class.\n"
+                        "The impact is a bounded upstream traversal (what depends on the method) from the Lineai graph "
+                        "impact endpoint, `depth` 3 by default; the report's 'Impact scope' section says whether the "
+                        "result is complete (`ok`) or a lower bound (`partial`) — a partial result is never 'no impact'.\n"
                         "When the impact graph contains unresolved references (calls to symbols that could "
                         "not be resolved inside the analyzed view), they are reported in a dedicated "
                         "'Unresolved References' section as dependency indicators.\n"
@@ -60,8 +67,20 @@ async def handle_list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "method": {"type": "string", "description": "Name of the method being analyzed"},
-                    "class": {"type": "string", "description": "Optional name of the class containing the method (case-insensitive substring filter)"},
+                    "method": {"type": "string", "description": "Short name of the method being analyzed (e.g. `run`)"},
+                    "class": {
+                        "type": "string",
+                        "description": "Class containing the method. Prefer the fully-qualified name (`pkg.Outer` or "
+                                       "`pkg.Outer.Inner`) — it selects exactly that class; a simple name is accepted "
+                                       "but must be unambiguous within the view (otherwise the candidates are listed).",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Upstream traversal depth for the impact subgraph (default 3; use 1–2 for "
+                                       "high-fanout methods, the server clamps to 10).",
+                    },
                     "workspace": _WORKSPACE_PROPERTY,
                     "materialized_view_id": _MV_ID_PROPERTY,
                 },
@@ -117,7 +136,14 @@ async def handle_list_tools() -> list[types.Tool]:
         types.Tool(
             name="lineai-graph-search",
             description="Search the Lineai knowledge graph (curated HTTP API). "
-                        "Provide `query` or `identity_prefix`; optional `scan_space`, `workspace`, `materialized_view_id`, `limit`. "
+                        "Provide `query` or `identity_prefix`; optional `scan_space`, `prefer_latest_scan`, `workspace`, `materialized_view_id`, `limit`. "
+                        "`data.nodes` is RANKED by the server: exact short-name match, then exact fully-qualified `name` match, "
+                        "then class-like labels over methods and fields, then text score (and newest scan with `prefer_latest_scan`); "
+                        "`data.hits[i]` describes `data.nodes[i]` with `score`, `matchKind` (exact-short-name | exact-name | fulltext) and `labelTier`. "
+                        "Reading results honestly: the first class-like hit whose `name` equals the fully-qualified class name IS that class, "
+                        "even when other repositories contain a class with the same simple name — report 'not indexed' ONLY when no hit "
+                        "of the right label/identity exists. `data.totalHitCount` may exceed the page: when the page is full, narrow with "
+                        "`identity_prefix` or `scan_space` rather than concluding the symbol is absent. "
                         "Results may include unresolved references (primaryLabel `UnresolvedReference`): "
                         "symbols that are referenced but could not be resolved in the view — treat them as dependency indicators. "
                         "Requires server route POST .../ai-retrieval/graph/search. "
@@ -125,14 +151,14 @@ async def handle_list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Symbol or text query (alias: q)"},
+                    "query": {"type": "string", "description": "Symbol or text query (alias: q). A fully-qualified name gets an exact-name boost; a simple name an exact-short-name boost."},
                     "q": {"type": "string", "description": "Alias for query"},
-                    "identity_prefix": {"type": "string", "description": "Prefix of stable graph identity"},
-                    "scan_space": {"type": "string", "description": "Optional scan-space / branch filter"},
+                    "identity_prefix": {"type": "string", "description": "Prefix of the stable graph identity (e.g. `com.acme.shell|`); identity-ordered, use it to narrow a full page"},
+                    "scan_space": {"type": "string", "description": "Optional scan space id or display name; only nodes from scans in that space are returned (unknown values are reported in `assumptionsApplied` as `scan_space_unknown:<value>` and ignored)"},
                     "workspace": _WORKSPACE_PROPERTY,
                     "materialized_view_id": _MV_ID_PROPERTY,
-                    "prefer_latest_scan": {"type": "boolean"},
-                    "limit": {"type": "integer", "description": "Suggested max hits (server may cap)"},
+                    "prefer_latest_scan": {"type": "boolean", "description": "Rank the node from the newest scan first among equal matches (older servers echo `prefer_latest_scan_not_implemented`)"},
+                    "limit": {"type": "integer", "description": "Page size, 1–100 (default 50); `totalHitCount` reports the real total"},
                 },
             },
         ),
@@ -140,6 +166,10 @@ async def handle_list_tools() -> list[types.Tool]:
             name="lineai-graph-impact",
             description="Bounded graph impact from seed node ids (curated HTTP API). "
                         "Optional `direction` (upstream|downstream|both), `depth`, `scan_space`, `workspace`, `materialized_view_id`. "
+                        "The response carries `status` (`ok` | `partial`), `assumptionsApplied` (e.g. `depth_defaulted_to_3`, "
+                        "`truncated_at_500_nodes`), `truncated`, `nodeCount` and `staticAnalysisGap`. "
+                        "A `partial` result is a LOWER BOUND, never 'no impact' — tighten with a smaller `depth` or a single seed. "
+                        "Prefer this tool with `depth` 1–3 on a class or method node id over `lineai-method-impact` when you already have the node id. "
                         f"{_SCOPE_NOTE}",
             inputSchema={
                 "type": "object",
@@ -147,11 +177,20 @@ async def handle_list_tools() -> list[types.Tool]:
                     "seed_node_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Graph node ids to expand from",
+                        "description": "Graph node ids to expand from (node and relationship budgets are shared across seeds)",
                     },
-                    "direction": {"type": "string", "enum": ["upstream", "downstream", "both"]},
-                    "depth": {"type": "integer"},
-                    "scan_space": {"type": "string"},
+                    "direction": {
+                        "type": "string",
+                        "enum": ["upstream", "downstream", "both"],
+                        "description": "`upstream` = what depends on the seeds (breaks when they change); `downstream` = what the seeds depend on; server default `both`",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Traversal depth; server default 3, maximum 10 — start with 1–3 for class or high-fanout seeds",
+                    },
+                    "scan_space": {"type": "string", "description": "Accepted for symmetry; the server does not filter impact by scan space (marker `scan_space_not_applied_on_impact`)"},
                     "workspace": _WORKSPACE_PROPERTY,
                     "materialized_view_id": _MV_ID_PROPERTY,
                 },

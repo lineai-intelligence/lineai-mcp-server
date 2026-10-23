@@ -147,6 +147,25 @@ class TestGraphMcpE2E(TestCase):
         i_out = asyncio.run(impact())
         self._require_graph_or_skip(_result_text(i_out))
 
+        # LIN-870: a bounded, directional probe must answer with the depth/direction it used
+        # and a status; a partial result is rendered as a lower-bound note above the JSON.
+        async def bounded_impact():
+            return await self._call_tool(
+                "lineai-graph-impact",
+                {"seed_node_ids": [node_id], "depth": 2, "direction": "upstream"},
+            )
+
+        b_out = asyncio.run(bounded_impact())
+        b_text = _result_text(b_out)
+        b_envelope = self._require_graph_or_skip(b_text)
+        b_data = b_envelope.get("data") or {}
+        if "depth" in b_data:  # LIN-870 server
+            self.assertEqual(b_data.get("depth"), 2)
+            self.assertEqual(b_data.get("direction"), "upstream")
+            self.assertIn(b_data.get("status"), ("ok", "partial"))
+            if b_data.get("status") == "partial":
+                self.assertIn("> **Status: partial**", b_text)
+
         async def path():
             return await self._call_tool(
                 "lineai-graph-path-explain",
@@ -173,6 +192,35 @@ class TestGraphMcpE2E(TestCase):
 
         o_out = asyncio.run(owners())
         self._require_graph_or_skip(_result_text(o_out))
+
+    def test_method_impact_uses_the_graph_backend(self):
+        """LIN-870: lineai-method-impact fetches its subgraph from the bounded graph impact endpoint."""
+        async def search():
+            return await self._call_tool("lineai-graph-search", {"query": "load", "limit": 15})
+
+        envelope = self._require_graph_or_skip(_result_text(asyncio.run(search())))
+        nodes = (envelope.get("data") or {}).get("nodes") or []
+        method_nodes = [n for n in nodes if str(n.get("primaryLabel", "")).endswith("MethodEntity")]
+        if not method_nodes:
+            self.skipTest("No method hits for query 'load' in this workspace")
+        identity = str(method_nodes[0].get("identity") or "")
+        short_name = str(method_nodes[0].get("properties", {}).get("shortName") or method_nodes[0].get("name") or "")
+        if "|" not in identity or not short_name:
+            self.skipTest("Could not derive a class / short name from the search hit")
+        fqn_class = identity.rsplit("|", 1)[0].replace("|", ".")
+
+        async def method_impact():
+            return await self._call_tool(
+                "lineai-method-impact",
+                {"method": short_name, "class": fqn_class, "depth": 2},
+            )
+
+        text = _result_text(asyncio.run(method_impact()))
+        if "Ambiguous Method" in text or "Unable to Analyze Method" in text:
+            self.skipTest(f"method-impact could not select a unique node: {text.splitlines()[0]}")
+        self.assertIn("## Impact scope", text)
+        self.assertRegex(text, r"- \*\*Source\*\*: (graph|legacy)")
+        self.assertRegex(text, r"- \*\*Status\*\*: `(ok|partial)`")
 
 
 if __name__ == "__main__":

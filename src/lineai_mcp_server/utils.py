@@ -720,9 +720,20 @@ def strip_unused_properties(response):
         str: Cleaned JSON string with optimized data
     """
     data = json.loads(response.text)
+    return json.dumps(strip_unused_node_properties(data))
 
+
+def strip_unused_node_properties(data):
+    """
+    In-place variant of :func:`strip_unused_properties` on an already-parsed
+    ``{"data": {"nodes": [...]}}`` dict (LIN-870: the graph impact payload is
+    mapped into the legacy shape and then stripped the same way). Returns the
+    same dict for chaining. Unresolved-reference nodes are left untouched.
+    """
+    if not isinstance(data, dict):
+        return data
     # Strip out specific fields
-    for node in data.get('data', {}).get('nodes', []):
+    for node in (data.get('data') or {}).get('nodes', []) or []:
         if is_unresolved_reference(node):
             continue
         properties = node.get('properties', {})
@@ -740,7 +751,7 @@ def strip_unused_properties(response):
         properties.pop('identity', None)
         properties.pop('name', None)
 
-    return json.dumps(data)
+    return data
 
 
 def extract_nodes(impact_data):

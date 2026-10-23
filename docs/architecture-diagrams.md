@@ -22,14 +22,14 @@ flowchart LR
         IDES["IDE assistants<br/><i>VS Code · Cursor · Claude Desktop · Windsurf<br/>uvx lineai-mcp-server@latest (PyPI)</i>"]
     end
 
-    MCP["lineai-mcp-server v1.3.2<br/><i>Python · mcp.server.Server · stdio only<br/>8 tools · in-process caches · no own graph logic</i>"]
+    MCP["lineai-mcp-server v1.4.x<br/><i>Python · mcp.server.Server · stdio only<br/>8 tools · in-process caches · no own graph logic</i>"]
 
     subgraph LINEAI["Lineai server (neo4cape) — LINEAI_SERVER_HOST"]
         AUTH["/api/authenticate"]
         MV["/api/materialized-view-definition/name<br/>/api/materialized-view/latest<br/>/api/materialized-view/default"]
         SEARCH["/api/ai-retrieval/search/*<br/>(shortname · table · column · view)"]
-        IMPACT["/api/dependency/impact/full/{id}/list"]
-        GRAPH["/api/ai-retrieval/graph/*<br/><i>404 until graph tier is deployed</i>"]
+        IMPACT["/api/dependency/impact/full/{id}/list<br/><i>legacy: lineai-database-impact,<br/>method-impact fallback</i>"]
+        GRAPH["/api/ai-retrieval/graph/*<br/><i>ranked search · bounded impact (LIN-870)<br/>404 until graph tier is deployed</i>"]
     end
 
     REG["PyPI + official MCP registry<br/><i>publish-to-pypi.yml · server.json</i>"]
@@ -58,18 +58,18 @@ flowchart TD
         DBG["src/start_server.py<br/><i>dev only: + debugpy :5679</i>"]
     end
 
-    SRV["server.py (88)<br/>Server('lineai-mcp-server') · load_dotenv<br/>stdio_server loop · instructions string"]
+    SRV["server.py (93)<br/>Server('lineai-mcp-server') · load_dotenv<br/>stdio_server loop · instructions string"]
 
     subgraph HANDLERS["handlers/"]
-        HINIT["__init__.py (249)<br/>@list_tools · @call_tool<br/>dispatch via asyncio.to_thread<br/>LineaiApiError rendering + last-resort wrapper"]
-        HMI["method_impact.py (459)<br/>lineai-method-impact<br/>Markdown impact report + UR section"]
+        HINIT["__init__.py (288)<br/>@list_tools · @call_tool<br/>dispatch via asyncio.to_thread<br/>LineaiApiError rendering + last-resort wrapper"]
+        HMI["method_impact.py (775)<br/>lineai-method-impact<br/>class selection by FQN rank (LIN-870)<br/>graph impact → legacy fallback<br/>Markdown report + Impact scope + UR section"]
         HDI["database_impact.py (168)<br/>lineai-database-impact<br/>combined DB report + UR section"]
-        HGT["graph_tools.py (188)<br/>6 × lineai-graph-*<br/>camelCase bodies → fenced JSON"]
-        HCOM["common.py (145)<br/>LINEAI_DEBUG_MODE · logs dir<br/>error_result (isError=True)<br/>render_lineai_api_error"]
+        HGT["graph_tools.py (237)<br/>6 × lineai-graph-*<br/>camelCase bodies → fenced JSON<br/>+ status / old-server notes (LIN-870)"]
+        HCOM["common.py (147)<br/>LINEAI_DEBUG_MODE · logs dir<br/>error_result (isError=True)<br/>render_lineai_api_error"]
     end
 
-    UTILS["utils.py (1388)<br/>LineaiApiError · _authed_request (401/403 retry)<br/>authenticate + token cache (expires_in)<br/>resolve_mv_id (+cache) · get_method_nodes (+cache)<br/>get_impact (+cache, viewId) · UR extraction<br/>DB search/report · shared httpx.Client"]
-    GC["graph_client.py (176)<br/>graph_request → /api/ai-retrieval/graph/*<br/>graph error messages"]
+    UTILS["utils.py (1399)<br/>LineaiApiError · _authed_request (401/403 retry)<br/>authenticate + token cache (expires_in)<br/>resolve_mv_id (+cache) · get_method_nodes (+cache)<br/>get_impact (+cache, viewId) · UR extraction<br/>DB search/report · shared httpx.Client"]
+    GC["graph_client.py (221)<br/>graph_request → /api/ai-retrieval/graph/*<br/>get_graph_impact (+cache, LIN-870)<br/>graph error messages"]
 
     PKG --> SRV
     DBG --> SRV
@@ -84,6 +84,7 @@ flowchart TD
     HDI --> UTILS
     HGT --> UTILS
     HGT --> GC
+    HMI -- "get_graph_impact (LIN-870)" --> GC
     GC -- "reuses _authed_request()<br/>and _client" --> UTILS
 
     style UTILS fill:#e8f0fe,stroke:#4285f4
@@ -102,7 +103,8 @@ sequenceDiagram
     participant U as utils.py
     participant L as Lineai /api
 
-    A->>H: call_tool(method, class?, workspace?, materialized_view_id?)
+    participant G as graph_client.py
+    A->>H: call_tool(method, class?, depth?, workspace?, materialized_view_id?)
     H->>U: resolve_mv_id(arguments)
     Note over U: precedence: explicit MV id → workspace arg →<br/>LINEAI_WORKSPACE_NAME → server default
     alt explicit materialized_view_id given
@@ -146,18 +148,46 @@ sequenceDiagram
     else no nodes — timeout / 504 / http_error
         H-->>A: per-kind infrastructure-error page, isError=true<br/>("says nothing about whether the method exists")
     else nodes found
-        H->>H: class filter — case-insensitive substring on identity<br/>(no match → candidates page, isError=true)
-        H->>U: get_impact(node.properties.id, mv_id)
-        alt impact cache hit ({id}:{mv_id}, TTL 300s)
-            U-->>H: cached stripped JSON
-        else miss
-            U->>L: GET /api/dependency/impact/full/{id}/list?viewId={mv_id}
-            L-->>U: impact graph (may include UR nodes)
-            U->>U: strip_unused_properties (URs untouched) → cache
-            U-->>H: JSON string
+        H->>H: select_method_node — class_match_rank (LIN-870):<br/>FQN=3 › simple=2 › substring=1 — URs never chosen
+        alt dotted class, no FQN match
+            H-->>A: fqn_not_found page (same-simple-name candidates), isError=true
+        else several classes (simple or absent class)
+            H-->>A: ambiguity page (classes + identities), isError=true
+        else rank 0
+            H-->>A: candidates page (up to 20 identities), isError=true
+        else one class chosen (overloads listed)
+            H->>H: fetch_impact(target_id, mv_id, depth)
+            alt LINEAI_METHOD_IMPACT_BACKEND != legacy
+                H->>G: get_graph_impact(id, mv_id, direction=upstream, depth)
+                alt graph impact cache hit (id:mv:dir:depth, TTL 300s)
+                    G-->>H: cached payload
+                else miss
+                    G->>L: POST /api/ai-retrieval/graph/impact<br/>{seedNodeIds, direction, depth, materializedViewId}
+                    alt 200
+                        L-->>G: {status ok|partial, assumptionsApplied, truncated,<br/>nodeCount, staticAnalysisGap, nodes, relationships}
+                        G-->>H: payload → cache
+                        H->>H: graph_impact_to_impact_data + strip_unused_node_properties
+                    else 404 (not deployed / node unknown)
+                        G-->>H: not_deployed → legacy fallback (reason recorded)
+                    else timeout / 504 / other
+                        G-->>H: kind → LineaiApiError(endpoint=/graph/impact) → dispatcher page
+                    end
+                end
+            end
+            opt legacy (env or fallback)
+                H->>U: get_impact(target_id, mv_id)
+                alt impact cache hit ({id}:{mv_id}, TTL 300s)
+                    U-->>H: cached stripped JSON
+                else miss
+                    U->>L: GET /api/dependency/impact/full/{id}/list?viewId={mv_id}
+                    L-->>U: impact graph (may include UR nodes)
+                    U->>U: strip_unused_properties (URs untouched) → cache
+                    U-->>H: JSON string
+                end
+            end
+            H->>H: metrics, owners, dependents, applications,<br/>REST endpoints, unresolved-reference section,<br/>Impact scope (source, status/lower bound, gap, class match)
+            H-->>A: Markdown impact report
         end
-        H->>H: metrics, owners, dependents, applications,<br/>REST endpoints, unresolved-reference section
-        H-->>A: Markdown impact report
     end
 ```
 
@@ -221,9 +251,12 @@ flowchart TD
         KOK["404 OR empty 200 →<br/><b>honest no-match page</b>:<br/>'view {mv_id} resolved; no method matched —<br/>not an index or infrastructure problem'"]
         KINfra["timeout / gateway_timeout / http_error →<br/>infrastructure page: 'says nothing about<br/>whether the method exists'"]
         KCLASS["class filter miss →<br/>candidates page (up to 20 identities)"]
+        KAMB["LIN-870: several classes → <b>ambiguity page</b><br/>dotted class not found → <b>fqn_not_found page</b><br/>(never another repository's class)"]
     end
     MI --> MIK
     MI -. "auth raises" .-> API
+    MI --> MIG["fetch_impact (LIN-870):<br/>graph 404 → legacy fallback (recorded in Impact scope)<br/>graph timeout/504/other → LineaiApiError<br/>status partial → 'lower bound' wording"]
+    MIG -. "raises" .-> API
 
     DI --> DSE["search_database_entity → (results, error_kind):<br/>honest infra pages; no-match page names the<br/>resolved view; per-entity impact failures →<br/>'Impact retrieval failures' table"]
     DI -. "auth / get_impact raise" .-> API
@@ -237,7 +270,8 @@ flowchart TD
     end
     GT --> GTK
     GT -. "auth raises" .-> API
-    GTK --> GTPAGE["graph_error_message →<br/>Markdown page with path + status"]
+    GTK --> GTPAGE["graph_error_message →<br/>Markdown page with path + status<br/>(timeouts: 'retry with smaller depth')"]
+    GT --> GSN["graph_status_note (LIN-870):<br/>status partial / truncated_at_* → lower-bound blockquote<br/>old-server *_not_implemented / *_reserved_* → 'ignored'<br/>staticAnalysisGap → note — all above the JSON"]
 
     MVRES["resolve_mv_id · get_impact:<br/>raise typed LineaiApiError"] --> API
     UNTYPED["argument-validation ValueErrors only"] --> WRAP["last-resort wrapper:<br/># Error executing tool: {name}<br/>raw exception text, isError=true"]

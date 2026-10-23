@@ -94,6 +94,7 @@ def render_lineai_api_error(tool_name: str, error) -> str:
             "## Recommendations\n"
             "1. Retry when the server is less busy, or raise `LINEAI_REQUEST_TIMEOUT` if appropriate.\n"
             f"2. Verify network access to: {host}\n"
+            "3. For impact tools, retry with a smaller `depth` (1–2) or a single seed first.\n"
         )
         title = "Request timed out"
     elif kind == "gateway_timeout":
@@ -104,6 +105,7 @@ def render_lineai_api_error(tool_name: str, error) -> str:
             "## Recommendations\n"
             "1. Try again in a few minutes; transient load or cold queries often cause this.\n"
             f"2. If it persists, check the health of the Lineai deployment at {host}.\n"
+            "3. For impact tools, retry with a smaller `depth` (1–2) or a single seed first.\n"
         )
         title = "Gateway timeout"
     elif kind == "invalid_response":
