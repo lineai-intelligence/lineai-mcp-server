@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 import mcp.types as types
 
+from lineai_mcp_server.graph_client import _graph_response_tuple, graph_error_message
 from lineai_mcp_server.handlers.graph_tools import (
+    graph_status_note,
     handle_lineai_graph_capabilities,
     handle_lineai_graph_impact,
     handle_lineai_graph_search,
@@ -85,6 +87,98 @@ class TestGraphTools(unittest.TestCase):
     def test_dispatch_unknown(self):
         with self.assertRaises(ValueError):
             handle_graph_tool("lineai-graph-unknown", {})
+
+    # --- LIN-870 ---
+
+    @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
+    def test_impact_forwards_depth_and_direction(self, mock_mv, mock_gr):
+        mock_mv.return_value = "mv-1"
+        mock_gr.return_value = ({"data": {"status": "ok", "nodes": [], "relationships": []}}, 200, None, "")
+        result = handle_lineai_graph_impact({"seed_node_ids": ["1"], "depth": 2, "direction": "upstream"})
+        body = mock_gr.call_args.kwargs["json_body"]
+        self.assertEqual(body["depth"], 2)
+        self.assertEqual(body["direction"], "upstream")
+        self.assertEqual(body["seedNodeIds"], ["1"])
+        self.assertNotIn("> **Status", result[0].text)
+
+    @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
+    def test_search_forwards_prefer_latest_scan_and_scan_space(self, mock_mv, mock_gr):
+        mock_mv.return_value = "mv-1"
+        mock_gr.return_value = ({"data": {"nodes": [], "hits": []}}, 200, None, "")
+        handle_lineai_graph_search({"query": "x", "prefer_latest_scan": True, "scan_space": "main"})
+        body = mock_gr.call_args.kwargs["json_body"]
+        self.assertIs(body["preferLatestScan"], True)
+        self.assertEqual(body["scanSpace"], "main")
+
+    @patch("lineai_mcp_server.handlers.graph_tools.graph_request")
+    @patch("lineai_mcp_server.handlers.graph_tools.resolve_mv_id")
+    def test_partial_impact_is_noted_above_the_json(self, mock_mv, mock_gr):
+        mock_mv.return_value = "mv-1"
+        payload = {"data": {"status": "partial", "assumptionsApplied": ["truncated_at_500_nodes"], "nodes": []}}
+        mock_gr.return_value = (payload, 200, None, "")
+        text = handle_lineai_graph_impact({"seed_node_ids": ["1"]})[0].text
+        note_at = text.index("> **Status: partial** (truncated_at_500_nodes)")
+        self.assertLess(note_at, text.index("```json"))
+        self.assertIn("lower bound", text)
+        self.assertIn("smaller `depth`", text)
+
+    def test_status_note_covers_old_server_markers_and_gap(self):
+        note = graph_status_note({"data": {
+            "status": "ok",
+            "assumptionsApplied": [
+                "depth_parameter_reserved_uses_full_impact_subgraph",
+                "prefer_latest_scan_not_implemented",
+                "scan_space_unknown:feature-x",
+                "scan_space_not_applied_on_impact",
+                "depth_defaulted_to_3",
+            ],
+            "staticAnalysisGap": True,
+        }})
+        self.assertIn("`depth` was ignored (older server", note)
+        self.assertIn("`prefer_latest_scan` was ignored (older server)", note)
+        self.assertIn("`scan_space` `feature-x` matched no scan space", note)
+        self.assertIn("not applied to impact", note)
+        self.assertIn("Static-analysis gap", note)
+        self.assertNotIn("depth_defaulted_to_3", note)
+        self.assertNotIn("Status:", note)
+
+    def test_404_route_missing_vs_entity_missing(self):
+        import json as _json
+
+        class R:
+            def __init__(self, code, text):
+                self.status_code, self.text = code, text
+
+            def json(self):
+                return _json.loads(self.text)
+
+        neo4cape_route = '{"status":"ERROR","error":{"code":"NOT_FOUND","message":"Resource not found /api/ai-retrieval/graph/impact"}}'
+        neo4cape_entity = '{"status":"ERROR","error":{"code":"NOT_FOUND","message":"Unable to locate node WITH id \'123\'"}}'
+        spring_default = '{"timestamp":"2026-10-26T19:00:00Z","status":404,"error":"Not Found","path":"/api/ai-retrieval/graph/impact"}'
+        self.assertEqual(_graph_response_tuple(R(404, neo4cape_route))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, spring_default))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, "<html>gateway</html>"))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, ""))[2], "not_deployed")
+        payload, status, kind, snippet = _graph_response_tuple(R(404, neo4cape_entity))
+        self.assertEqual((payload, status, kind), (None, 404, "not_found"))
+        self.assertEqual(snippet, "Unable to locate node WITH id '123'")
+        self.assertEqual(_graph_response_tuple(R(200, '{"data": {}}'))[2], None)
+
+    def test_not_found_renders_a_graph_page_not_a_deployment_page(self):
+        text = graph_error_message("lineai-graph-impact", "/impact", "not_found", 404, "Unable to locate node WITH id '123'")
+        self.assertIn("# Graph node not found", text)
+        self.assertIn("Unable to locate node WITH id '123'", text)
+        self.assertNotIn("not deployed", text)
+        self.assertIn("Re-run `lineai-graph-search`", text)
+
+    def test_status_note_tolerates_bare_and_odd_payloads(self):
+        self.assertEqual(graph_status_note({"status": "ok", "assumptionsApplied": []}), "")
+        self.assertIn("Status: partial", graph_status_note({"status": "partial"}))
+        self.assertEqual(graph_status_note(None), "")
+        self.assertEqual(graph_status_note(["not", "a", "dict"]), "")
+        self.assertEqual(graph_status_note({"data": None}), "")
 
 
 if __name__ == "__main__":

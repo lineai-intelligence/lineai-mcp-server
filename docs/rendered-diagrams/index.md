@@ -5,8 +5,9 @@ Committed SVG renders of every Mermaid diagram in
 rendered with the digest-pinned `mermaid-cli` container
 (`ghcr.io/mermaid-js/mermaid-cli/mermaid-cli@sha256:062edb08dcc7f95841c15620241b6934af93aa75c27f223ebe2e81fd0b4da4c9`).
 Added for Linear ticket **LIN-737**; diagrams 01–05 re-rendered for **LIN-699**
-(PR #61 / neo4cape #1860). If you edit a diagram, re-render its SVG so the two
-stay in sync.
+(PR #61 / neo4cape #1860) and again for **LIN-870** (ranked search, bounded
+graph impact, method-impact class selection). If you edit a diagram, re-render
+its SVG so the two stay in sync.
 
 | # | Diagram | SVG |
 |---|---------|-----|

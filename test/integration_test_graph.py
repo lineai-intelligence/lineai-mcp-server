@@ -147,6 +147,25 @@ class TestGraphMcpE2E(TestCase):
         i_out = asyncio.run(impact())
         self._require_graph_or_skip(_result_text(i_out))
 
+        # LIN-870: a bounded, directional probe must answer with the depth/direction it used
+        # and a status; a partial result is rendered as a lower-bound note above the JSON.
+        async def bounded_impact():
+            return await self._call_tool(
+                "lineai-graph-impact",
+                {"seed_node_ids": [node_id], "depth": 2, "direction": "upstream"},
+            )
+
+        b_out = asyncio.run(bounded_impact())
+        b_text = _result_text(b_out)
+        b_envelope = self._require_graph_or_skip(b_text)
+        b_data = b_envelope.get("data") or {}
+        if "depth" in b_data:  # LIN-870 server
+            self.assertEqual(b_data.get("depth"), 2)
+            self.assertEqual(b_data.get("direction"), "upstream")
+            self.assertIn(b_data.get("status"), ("ok", "partial"))
+            if b_data.get("status") == "partial":
+                self.assertIn("> **Status: partial**", b_text)
+
         async def path():
             return await self._call_tool(
                 "lineai-graph-path-explain",
@@ -173,6 +192,57 @@ class TestGraphMcpE2E(TestCase):
 
         o_out = asyncio.run(owners())
         self._require_graph_or_skip(_result_text(o_out))
+
+    def test_method_impact_uses_the_graph_backend(self):
+        """LIN-870: lineai-method-impact fetches its subgraph from the bounded graph impact endpoint."""
+        async def search():
+            return await self._call_tool("lineai-graph-search", {"query": "load", "limit": 15})
+
+        envelope = self._require_graph_or_skip(_result_text(asyncio.run(search())))
+        nodes = (envelope.get("data") or {}).get("nodes") or []
+        method_nodes = [n for n in nodes if str(n.get("primaryLabel", "")).endswith("MethodEntity")]
+        if not method_nodes:
+            self.skipTest("No method hits for query 'load' in this workspace")
+        method = method_nodes[0]
+        method_id = str(method.get("id") or method.get("properties", {}).get("id") or "")
+        short_name = str(method.get("properties", {}).get("shortName") or method.get("name") or "")
+        if not method_id or method_id == "None" or not short_name:
+            self.skipTest("Could not derive a node id / short name from the search hit")
+
+        # The class argument comes from the containing class node's `name` (the FQN), NOT from the
+        # method identity: deriving it from the identity matched by construction and hid the
+        # archive-prefix bug (review on PR #63). Contains edges are incoming in every direction mode,
+        # so a depth-1 probe on the method reaches its class.
+        async def parent_probe():
+            return await self._call_tool(
+                "lineai-graph-impact",
+                {"seed_node_ids": [method_id], "depth": 1, "direction": "upstream"},
+            )
+
+        probe = self._require_graph_or_skip(_result_text(asyncio.run(parent_probe())))
+        class_nodes = [
+            n for n in ((probe.get("data") or {}).get("nodes") or [])
+            if str(n.get("primaryLabel", "")).endswith("ClassEntity") and n.get("name")
+        ]
+        if not class_nodes:
+            self.skipTest("Depth-1 probe did not reach the containing class node")
+        fqn_class = str(class_nodes[0]["name"])
+        self.assertIn(".", fqn_class, f"class node name is not fully qualified: {fqn_class!r}")
+
+        async def method_impact():
+            return await self._call_tool(
+                "lineai-method-impact",
+                {"method": short_name, "class": fqn_class, "depth": 2},
+            )
+
+        text = _result_text(asyncio.run(method_impact()))
+        # A fully-qualified class must select its own node: a not-found page here IS the bug.
+        self.assertNotIn("no match belongs to the class", text, text.splitlines()[0])
+        self.assertNotIn("Ambiguous Method", text, "an FQN can never be ambiguous")
+        self.assertIn("## Impact scope", text)
+        self.assertIn(f"- **Class**: `{fqn_class}`", text)
+        self.assertRegex(text, r"- \*\*Source\*\*: (graph|legacy)")
+        self.assertRegex(text, r"- \*\*Status\*\*: `(ok|partial)`")
 
 
 if __name__ == "__main__":

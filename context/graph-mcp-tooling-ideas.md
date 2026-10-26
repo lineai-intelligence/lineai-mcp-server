@@ -140,6 +140,9 @@ Optional early win: **`lineai-graph-classpath-slice`** when `SEARCH` data is use
 
 - Timeouts and retries at the **HTTP** layer; caps inside the service.
 - **`status=partial`** when truncated or degraded; never silent under-completion.
+  *Implemented (LIN-870):* `POST /ai-retrieval/graph/impact` returns `status: partial`, `truncated`
+  and `truncated_at_<n>_nodes|relationships` markers; the MCP tools render a lower-bound note above
+  the JSON and `lineai-method-impact` reports it in its **Impact scope** section.
 
 ## Implementation roadmap (sketch)
 
@@ -162,12 +165,14 @@ These were design tensions; below are **default recommendations** so implementat
 **Recommendation:** **Do not silently merge** duplicate graph nodes in the API. Every response row should carry **stable ids** (`elementId` or service-native id), **`identity`**, and **provenance** (materialized view / scan / materialization metadata when available). If the product ever defines a **canonical merge key**, that should be an **explicit, versioned** field (e.g. `logical_entity_id`) returned alongside raw nodes—not inferred from `name` alone.
 
 **Default narrowing:** Honor the caller’s **scope** (MV, workspace, optional scan-space filter). Within that scope, optional flags such as **`prefer_latest_scan=true`** (default **off** or **on** per product decision) should be **documented** and reflected in the response (`assumptions_applied`).
+*Implemented (LIN-870):* search accepts `scanSpace` (id or display name → `scan_space_filter_applied:<id>` / `scan_space_unknown:<value>`) and `preferLatestScan` (default off → `prefer_latest_scan_applied`); hits are ranked (exact short name › exact name › class-like › score › newest scan) and carry `hits[i].matchKind`; impact does not filter by scan space (`scan_space_not_applied_on_impact`).
 
 ### Multi-`ScanSpace` databases
 
 **Recommendation:** **Never default to “all scans”** for impact or path tools—too easy to mix branches and blow caps. Default to **(a)** the narrowest scope implied by the request (e.g. MV + latest materialization already resolved for shortname search), or **(b)** **require** an explicit **`scan_space` / branch / scan id`** when the backend detects **multiple** candidates for the same identity prefix.
 
 Search/discovery tools may return **disambiguation groups** (`status=partial`, multiple hits) instead of picking a branch arbitrarily.
+*Implemented (LIN-870) on the client:* `lineai-method-impact` returns an ambiguity page listing the classes when a simple class name (or none) matches several classes, and an `fqn_not_found` page when a fully-qualified class has no node — it never analyses another repository's class.
 
 ### Contract stability of labels and relationship types
 

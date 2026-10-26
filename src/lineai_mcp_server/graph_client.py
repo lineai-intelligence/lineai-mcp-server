@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from typing import Any, Literal, Optional
 
 import httpx
@@ -22,11 +23,40 @@ import httpx
 from . import utils
 
 GraphErrorKind = Optional[
-    Literal["not_deployed", "timeout", "gateway_timeout", "http_error", "invalid_json"]
+    Literal["not_deployed", "not_found", "timeout", "gateway_timeout", "http_error", "invalid_json"]
 ]
 
 # Same path layout as existing ai-retrieval usage in utils.py
 _GRAPH_REL_PREFIX = "/api/ai-retrieval/graph"
+
+# LIN-870: bounded impact results for lineai-method-impact, keyed per
+# ``node:mv:direction:depth``; successful payloads only, ``IMPACT_CACHE_TTL``.
+_graph_impact_cache: dict[str, tuple[tuple[Any | None, int, GraphErrorKind, str], datetime]] = {}
+
+
+def _entity_not_found_message(text: str) -> str | None:
+    """
+    LIN-870: neo4cape answers **two** kinds of 404 with the same envelope
+    (``{"error": {"code": "NOT_FOUND", "message": ...}}``): a missing route
+    (``"Resource not found /api/..."``, from its ``NoResourceFoundException``
+    handler) and a missing entity (``"Unable to locate node WITH id '...'"``,
+    a ``CodeLogicEntityNotFoundException``). Only the second is a statement
+    about the graph. Returns the server message for an entity 404, else None
+    (missing route, Spring's default body, a gateway's HTML page).
+    """
+    try:
+        body = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = str(error.get("message") or "")
+    if not message or message.startswith("Resource not found"):
+        return None
+    return message
 
 
 def _graph_response_tuple(response: httpx.Response) -> tuple[Any | None, int, GraphErrorKind, str]:
@@ -34,6 +64,9 @@ def _graph_response_tuple(response: httpx.Response) -> tuple[Any | None, int, Gr
     snippet = text[:2000] if text else ""
     code = response.status_code
     if code == 404:
+        entity_message = _entity_not_found_message(text)
+        if entity_message is not None:
+            return None, 404, "not_found", entity_message
         return None, 404, "not_deployed", snippet
     if code == 504:
         return None, 504, "gateway_timeout", snippet
@@ -113,6 +146,46 @@ def graph_request(
         return None, e.status or 0, "http_error", e.detail or str(e)
 
 
+def get_graph_impact(
+    node_id: str,
+    mv_id: str | None,
+    *,
+    direction: str = "upstream",
+    depth: int = 3,
+) -> tuple[Any | None, int, GraphErrorKind, str]:
+    """
+    LIN-870: bounded impact for one seed via ``POST /api/ai-retrieval/graph/impact``.
+
+    Same tuple contract as :func:`graph_request`. ``direction`` is ``upstream``
+    (what depends on the seed — the method-impact default), ``downstream`` or
+    ``both``; ``depth`` is the traversal depth the server clamps to 1..10.
+    Successful responses are cached per ``node:mv:direction:depth`` for
+    ``utils.IMPACT_CACHE_TTL`` seconds, mirroring the legacy impact cache.
+    """
+    cache_key = f"{node_id}:{mv_id}:{direction}:{depth}"
+    now = datetime.now()
+    cached = _graph_impact_cache.get(cache_key)
+    if cached is not None:
+        result, expiry = cached
+        if now < expiry:
+            sys.stderr.write(f"Graph impact cache hit for {cache_key}\n")
+            return result
+        sys.stderr.write(f"Graph impact cache expired for {cache_key}\n")
+
+    body: dict[str, Any] = {
+        "seedNodeIds": [str(node_id)],
+        "direction": direction,
+        "depth": int(depth),
+    }
+    if mv_id is not None:
+        body["materializedViewId"] = mv_id
+    result = graph_request("POST", "/impact", json_body=body)
+    if result[2] is None:
+        _graph_impact_cache[cache_key] = (result, now + timedelta(seconds=utils.IMPACT_CACHE_TTL))
+        sys.stderr.write(f"Graph impact cached for {cache_key} with TTL {utils.IMPACT_CACHE_TTL}s\n")
+    return result
+
+
 def graph_not_deployed_message(tool_name: str, path_suffix: str, status_code: int, snippet: str) -> str:
     host = graph_api_base_url() or "(not configured)"
     tail = f"\n\nResponse excerpt:\n```\n{snippet}\n```\n" if snippet.strip() else ""
@@ -141,19 +214,35 @@ def graph_error_message(
 ) -> str:
     if kind == "not_deployed":
         return graph_not_deployed_message(tool_name, path_suffix, status_code or 404, snippet)
+    if kind == "not_found":
+        return f"""# Graph node not found: `{tool_name}`
+
+The Lineai graph API is deployed, but the server could not find a node this request named (`{path_suffix}`, HTTP 404):
+
+```
+{snippet[:1500]}
+```
+
+This is a statement about the graph, not an infrastructure problem: the node id is not in the requested materialized view (the view may have been rebuilt since the id was obtained, or the id belongs to another view).
+
+## What to do
+
+1. Re-run `lineai-graph-search` to obtain a current node id in the same `workspace` / `materialized_view_id`.
+2. Check that the `materialized_view_id` matches the one the id came from.
+"""
     if kind == "timeout":
         return f"""# Graph request timed out: `{tool_name}`
 
 The request to `{path_suffix}` exceeded the HTTP client timeout (`LINEAI_REQUEST_TIMEOUT`).
 
-Try again later or increase the timeout if appropriate.
+Try again later or increase the timeout if appropriate. For impact requests, retry with a smaller `depth` (1–2) or a single seed first.
 """
     if kind == "gateway_timeout":
         return f"""# Graph gateway timeout: `{tool_name}`
 
 The Lineai server returned **504** for `{path_suffix}`.
 
-Retry when the server is less busy.
+Retry when the server is less busy. For impact requests, retry with a smaller `depth` (1–2) or a single seed first.
 """
     if kind == "invalid_json":
         return f"""# Invalid JSON from graph API: `{tool_name}`

@@ -39,9 +39,58 @@ def _strip_nones(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
-def _markdown_json(title: str, payload: Any) -> str:
+def _graph_payload_data(payload: Any) -> dict[str, Any]:
+    """Unwrap the Lineai ``{"data": {...}}`` envelope; tolerate a bare body."""
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        return payload["data"]
+    return payload if isinstance(payload, dict) else {}
+
+
+# LIN-870: markers an older neo4cape emits for options it does not implement.
+_OLD_SERVER_MARKERS = {
+    "depth_parameter_reserved_uses_full_impact_subgraph": "`depth` was ignored (older server: full impact subgraph)",
+    "direction_parameter_reserved_uses_full_impact_subgraph": "`direction` was ignored (older server: full impact subgraph)",
+    "prefer_latest_scan_not_implemented": "`prefer_latest_scan` was ignored (older server)",
+    "scan_space_filter_not_implemented": "`scan_space` was ignored (older server)",
+}
+
+
+def graph_status_note(payload: Any) -> str:
+    """
+    LIN-870: Markdown blockquote lines that make a partial, degraded or
+    old-server response impossible to misread. Empty when nothing applies.
+    """
+    data = _graph_payload_data(payload)
+    assumptions = [str(a) for a in (data.get("assumptionsApplied") or [])]
+    truncations = [a for a in assumptions if a.startswith("truncated_at_")]
+    status = data.get("status")
+    lines: list[str] = []
+    if (status and status != "ok") or truncations:
+        detail = f" ({', '.join(truncations)})" if truncations else ""
+        lines.append(
+            f"> **Status: {status or 'partial'}**{detail} — this result is a lower bound, not the full picture; "
+            "never read it as \"no impact\". Re-run with a smaller `depth`, a single seed, or a `scan_space` filter to tighten it."
+        )
+    for marker in assumptions:
+        if marker in _OLD_SERVER_MARKERS:
+            lines.append(f"> {_OLD_SERVER_MARKERS[marker]}.")
+        elif marker.startswith("scan_space_unknown:"):
+            lines.append(f"> `scan_space` `{marker.split(':', 1)[1]}` matched no scan space — results are unfiltered.")
+        elif marker == "scan_space_not_applied_on_impact":
+            lines.append("> `scan_space` is not applied to impact (it would hide cross-scan dependants).")
+    if data.get("staticAnalysisGap") is True:
+        lines.append(
+            "> **Static-analysis gap**: no `INVOKES*` edges in this subgraph — call-site impact may be under-reported."
+        )
+    return "\n".join(lines)
+
+
+def _markdown_json(title: str, payload: Any, note: str = "") -> str:
     text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
-    return f"# {title}\n\n```json\n{text}\n```\n"
+    head = f"# {title}\n\n"
+    if note:
+        head += f"{note}\n\n"
+    return f"{head}```json\n{text}\n```\n"
 
 
 def _run_graph_tool(
@@ -58,7 +107,7 @@ def _run_graph_tool(
     if kind is not None:
         msg = graph_error_message(tool_name, path_suffix, kind, status, snippet)
         return error_result(msg)
-    return [types.TextContent(type="text", text=_markdown_json(tool_name, payload))]
+    return [types.TextContent(type="text", text=_markdown_json(tool_name, payload, graph_status_note(payload)))]
 
 
 def handle_lineai_graph_search(arguments: dict | None) -> list[types.TextContent] | types.CallToolResult:

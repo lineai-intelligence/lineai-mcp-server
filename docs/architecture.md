@@ -58,14 +58,14 @@ paths remain anywhere in this repo).
 
 | Path | Lines | Purpose |
 |---|---|---|
-| `src/lineai_mcp_server/server.py` | 88 | MCP `Server` instance, `.env` loading, stdio main loop, server `instructions` |
-| `src/lineai_mcp_server/handlers/__init__.py` | 249 | `@server.list_tools` / `@server.call_tool` registration; tool schemas (shared `workspace`/`materialized_view_id` properties); dispatch via `asyncio.to_thread`; `LineaiApiError` rendering + last-resort error wrapper |
-| `src/lineai_mcp_server/handlers/method_impact.py` | 459 | `lineai-method-impact` handler + Markdown report builder |
+| `src/lineai_mcp_server/server.py` | 93 | MCP `Server` instance, `.env` loading, stdio main loop, server `instructions` |
+| `src/lineai_mcp_server/handlers/__init__.py` | 288 | `@server.list_tools` / `@server.call_tool` registration; tool schemas (shared `workspace`/`materialized_view_id` properties); dispatch via `asyncio.to_thread`; `LineaiApiError` rendering + last-resort error wrapper |
+| `src/lineai_mcp_server/handlers/method_impact.py` | 775 | `lineai-method-impact` handler + Markdown report builder |
 | `src/lineai_mcp_server/handlers/database_impact.py` | 168 | `lineai-database-impact` handler |
-| `src/lineai_mcp_server/handlers/graph_tools.py` | 188 | the six `lineai-graph-*` handlers + dispatch table |
-| `src/lineai_mcp_server/handlers/common.py` | 145 | `LINEAI_DEBUG_MODE`, debug-log directory, `error_result()` (`isError=True`), `render_lineai_api_error()`, timing log |
-| `src/lineai_mcp_server/utils.py` | 1388 | `LineaiApiError`, `_authed_request` (single auth-header site), caches, MV resolver, impact retrieval/shaping, unresolved-reference extraction, database-report generation |
-| `src/lineai_mcp_server/graph_client.py` | 176 | HTTP wrapper for `/api/ai-retrieval/graph/*` (via `utils._authed_request`) + graph error messages |
+| `src/lineai_mcp_server/handlers/graph_tools.py` | 237 | the six `lineai-graph-*` handlers + dispatch table |
+| `src/lineai_mcp_server/handlers/common.py` | 147 | `LINEAI_DEBUG_MODE`, debug-log directory, `error_result()` (`isError=True`), `render_lineai_api_error()`, timing log |
+| `src/lineai_mcp_server/utils.py` | 1399 | `LineaiApiError`, `_authed_request` (single auth-header site), caches, MV resolver, impact retrieval/shaping, unresolved-reference extraction, database-report generation |
+| `src/lineai_mcp_server/graph_client.py` | 221 | HTTP wrapper for `/api/ai-retrieval/graph/*` (via `utils._authed_request`) + graph error messages |
 | `src/lineai_mcp_server/__init__.py` | 25 | package entry point (`main()` → `asyncio.run(server.main())`) — the `lineai-mcp-server` console script |
 | `src/start_server.py` | 42 | **dev-only** entry point: starts a `debugpy` listener on `127.0.0.1:5679`, then runs the same `main()` |
 | `test/` | — | 4 unit suites (93 tests, mocked HTTP) + 2 integration suites against a real host |
@@ -140,9 +140,10 @@ resolutions are cached (§6).
 ### 4.1 `lineai-method-impact` (`handlers/method_impact.py`)
 
 The richest handler. Inputs: `method` (required — schema and code agree since
-PR #61), `class` (**optional**, a case-insensitive substring filter on node
-identity; a dotted class name is reduced to its last segment), plus the shared
-scope arguments.
+PR #61), `class` (**optional**; since LIN-870 the full value is used for
+selection — a fully-qualified name selects exactly that class, a simple name
+must be unique in the view), `depth` (**optional**, 1–10, default 3 — LIN-870),
+plus the shared scope arguments.
 
 Pipeline (endpoints in call order):
 
@@ -154,17 +155,44 @@ Pipeline (endpoints in call order):
    `Content-Type: application/json` with an empty dict caused gateway 504 stalls
    that Swagger did not reproduce). Returns the `(nodes, error_kind)` tuple (§7.1)
    and populates the method-nodes cache (§6, non-empty results only).
-3. **Node selection** — if `class` was given, pick the first node whose
-   `identity` contains it (case-insensitive substring). No match renders a
-   shaped no-match page listing up to 20 candidate identities (not a
-   `ValueError` any more — finding 9, resolved); without `class`, the first
-   node wins.
-4. **Impact fetch** — `get_impact(node.properties.id, mv_id)`:
-   `GET /api/dependency/impact/full/{id}/list?viewId={mv_id}` (the resolved
-   view id is now sent as `viewId` so the traversal is scoped to that view),
-   response stripped of a dozen internal properties (`strip_unused_properties`
-   — unresolved-reference nodes are left untouched) and cached per
-   `{id}:{mv_id}` (§6).
+3. **Node selection (LIN-870)** — `select_method_node(nodes, class)` ranks every
+   concrete (non-UR) node by `class_match_rank`: **3** the identity's class path
+   equals the fully-qualified `class` (`pkg|Outer|run()`, `pkg.Outer|run()` and
+   `pkg|Outer$Inner|run()` all normalise to dotted lower-case), **2** its last
+   component equals the simple name, **1** substring, **0** none. A dotted
+   `class` with no rank-3 node renders an **`fqn_not_found`** page listing the
+   same-simple-name identities — another repository's class is never analysed in
+   its place. A simple (or absent) `class` whose best matches span **several
+   classes** (`class_key` = identity minus its signature segment) renders an
+   **ambiguity page** asking for the fully-qualified name; one class with several
+   signatures analyses the first and lists the overloads. The legacy
+   "no class match" candidates page (up to 20 identities) remains for rank 0.
+4. **Impact fetch (LIN-870)** — `fetch_impact(target_id, mv_id, depth)`: by
+   default `graph_client.get_graph_impact` → `POST /api/ai-retrieval/graph/impact`
+   `{seedNodeIds:[id], direction:"upstream", depth, materializedViewId}`, cached
+   per `node:mv:direction:depth` (§6); the payload (`status`, `assumptionsApplied`,
+   `truncated`, `nodeCount`, `staticAnalysisGap`, `nodes`, `relationships`) is
+   mapped by `graph_impact_to_impact_data` into the legacy
+   `{"data": {"nodes", "relationships"}}` shape and stripped by
+   `strip_unused_node_properties`. A graph **404 for the route** (`not_deployed`:
+   neo4cape's `"Resource not found …"` envelope, Spring's default body, or a
+   gateway page) or `LINEAI_METHOD_IMPACT_BACKEND=legacy` falls back to
+   `get_impact(target_id, mv_id)`:
+   `GET /api/dependency/impact/full/{id}/list?viewId={mv_id}` (unbounded full
+   incoming chain, `strip_unused_properties`, cached per `{id}:{mv_id}`). Graph
+   timeouts / 504s / other errors raise a typed `LineaiApiError` (§7) instead of
+   silently retrying on the unbounded path. A **404 that names the node**
+   (`not_found`: neo4cape's `"Unable to locate node WITH id …"` envelope — the
+   route exists, the node is not in that view) raises `MethodImpactSeedNotFound`
+   and renders a search/view-disagreement page; it never falls back, because the
+   legacy traversal from an unknown id answers an empty 200 that would read as
+   "isolated". `fetch_impact` also returns a `meta` dict (source, status,
+   truncation markers, static-analysis gap, node count, depth/direction,
+   fallback reason, `bounded`). `bounded` is false when the payload has no
+   `depth` field — a server without LIN-870 ignored `depth`/`direction` and ran
+   the full both-direction subgraph — and the Impact-scope block then says so
+   instead of echoing the requested depth; the `*_reserved_*` markers are
+   rendered as prose via `graph_tools._OLD_SERVER_MARKERS`.
 5. **Report assembly** — extracts nodes/relationships, finds the target method node
    (preferring one with `statistics.cyclomaticComplexity`), code owners/reviewers
    (`lineai.owners` / `lineai.reviewers`, falling back to the containing class
@@ -175,8 +203,14 @@ Pipeline (endpoints in call order):
    `INVOKES_ENDPOINT`/`REFERENCES_ENDPOINT` edges).
 
 Output: a Markdown report — AI guidelines, summary (complexity/instruction count,
-owners, resolved materialized view), risk assessment (complexity > 10 flagged,
-cross-application warning, REST API alerts), dependents list, an
+owners, resolved materialized view, the **chosen class** as its dotted path), an
+**Impact scope** block (source graph|legacy + fallback reason, `status` with the
+`truncated_at_*` markers and a "counts below are a lower bound" warning when
+partial, static-analysis gap, nodes reached, other server markers, how the class
+matched, overloads), risk assessment (complexity > 10 flagged,
+cross-application warning, REST API alerts), dependents list (which says
+"partial — not evidence of isolation" instead of "isolated" when the probe was
+truncated), an
 unresolved-references section when the graph contains any (§4.4), a per-node
 metrics table (UR nodes excluded — they carry no metrics), a full relationship
 table (target rows bolded), and an ASCII application-dependency graph when more
@@ -225,13 +259,20 @@ snake_case (and camelCase alias) arguments, validate required fields, build a
 delegate to `graph_request` (which routes through `utils._authed_request`, §5).
 Success responses are returned verbatim as
 `# {tool-name}` + fenced, sorted, pretty-printed JSON; the agent does its own
-interpretation — unlike §4.1/4.2 there is no report shaping.
+interpretation — unlike §4.1/4.2 there is no report shaping. The one addition
+(LIN-870) is `graph_status_note`: blockquote lines **above** the JSON whenever
+`status != ok` or a `truncated_at_*` marker is present ("lower bound, never
+'no impact'; re-run with a smaller `depth`, a single seed or `scan_space`"), when
+an older server echoes `*_not_implemented` / `*_reserved_*` markers ("`x` was
+ignored (older server)"), for `scan_space_unknown:<v>` /
+`scan_space_not_applied_on_impact`, and for `staticAnalysisGap: true`. The
+`{"data": …}` envelope is unwrapped for that check (a bare body is tolerated).
 
 | Tool | Method + path suffix | Required args | Optional args |
 |---|---|---|---|
 | `lineai-graph-capabilities` | `GET /capabilities?materializedViewId=` | — | `workspace`, `materialized_view_id` (+ camelCase alias `materializedViewId`) |
-| `lineai-graph-search` | `POST /search` | `query`/`q` or `identity_prefix` | `scan_space`, `prefer_latest_scan`, `limit`, `workspace`, `materialized_view_id` |
-| `lineai-graph-impact` | `POST /impact` | `seed_node_ids` (non-empty list) | `direction` (`upstream`\|`downstream`\|`both`), `depth`, `scan_space`, `workspace`, `materialized_view_id` |
+| `lineai-graph-search` | `POST /search` | `query`/`q` or `identity_prefix` | `scan_space` (id or display name; LIN-870 server filters), `prefer_latest_scan` (LIN-870 server ranks newest scan first), `limit`, `workspace`, `materialized_view_id` — the server ranks hits (exact short name › exact name › class-like › score) and returns `hits[]` + the real `totalHitCount` |
+| `lineai-graph-impact` | `POST /impact` | `seed_node_ids` (non-empty list) | `direction` (`upstream`\|`downstream`\|`both`, server default both), `depth` (1–10, server default 3), `scan_space` (not applied on impact), `workspace`, `materialized_view_id` — response `status ok\|partial`, `truncated`, `nodeCount`, `staticAnalysisGap`, `assumptionsApplied` |
 | `lineai-graph-path-explain` | `POST /path` | `from_node_id`, `to_node_id` | `max_depth`, `scan_space`, `workspace`, `materialized_view_id` |
 | `lineai-graph-validate-change-scope` | `POST /validate-change-scope` | `seed_node_ids`, `proposed_change_summary` | `scan_space`, `workspace`, `materialized_view_id` |
 | `lineai-graph-owners` | `POST /owners` | `node_id` or `identity_prefix` | `scan_space`, `workspace`, `materialized_view_id` |
@@ -319,7 +360,8 @@ live for the full TTL even if the underlying graph is rescanned):
 | token (`_cached_token`/`_token_expiry`) | — (single slot) | bearer token | `LINEAI_TOKEN_CACHE_TTL`, 3600 s (capped by server `expires_in` − 30 s, §5) |
 | `_mv_cache` (new in PR #61) | workspace name, or `"<server-default>"` when none given | materialized view id | `LINEAI_MV_CACHE_TTL`, 300 s |
 | `_method_nodes_cache` | `"{mv_id}:{short_name}"` | node list from shortname search | `LINEAI_METHOD_CACHE_TTL`, 300 s |
-| `_impact_cache` | `"{id}:{mv_id}"` | stripped impact JSON **string** | `LINEAI_IMPACT_CACHE_TTL`, 300 s |
+| `_impact_cache` | `"{id}:{mv_id}"` | stripped impact JSON **string** (legacy endpoint) | `LINEAI_IMPACT_CACHE_TTL`, 300 s |
+| `graph_client._graph_impact_cache` (LIN-870) | `"{id}:{mv_id}:{direction}:{depth}"` | the `(payload, status, None, snippet)` tuple of a successful bounded graph impact | `LINEAI_IMPACT_CACHE_TTL`, 300 s (successes only) |
 
 Expired entries are detected on read but never evicted (the dict entry is simply
 overwritten on the next successful fetch). Asymmetries worth knowing:
@@ -375,8 +417,11 @@ gets a well-formed answer, never a protocol error.
 ### 7.2 Graph error kinds — `graph_client.py`
 
 The graph path has a parallel taxonomy, computed from the response rather than
-exceptions where possible: `not_deployed` (404 — "graph endpoints not deployed on
-this host; use lineai-method-impact / lineai-database-impact instead"),
+exceptions where possible: `not_deployed` (404 **for the route** — "graph endpoints
+not deployed on this host; use lineai-method-impact / lineai-database-impact
+instead"), `not_found` (404 **for an entity** — neo4cape's envelope with a message
+other than "Resource not found …", e.g. "Unable to locate node WITH id …";
+rendered as "Graph node not found", a statement about the graph, since LIN-870),
 `gateway_timeout` (504), `http_error` (other ≥400, or transport error, or unset
 `LINEAI_SERVER_HOST`, or unsupported method), `timeout`, and `invalid_json`
 (2xx body that fails to parse; the message includes a ≤1500-char excerpt).
@@ -384,7 +429,12 @@ Since PR #61 the requests go through `utils._authed_request`, so transport
 errors arrive as `LineaiApiError` (mapped onto `timeout`/`http_error`) and
 `auth` failures raise to the dispatcher's per-kind page. `graph_error_message`
 renders each kind as Markdown with the failing path and status, returned with
-`isError=True`.
+`isError=True`. The timeout / 504 pages (and `render_lineai_api_error`'s) add
+"retry with a smaller `depth` (1–2) or a single seed" since LIN-870. When
+`lineai-method-impact` uses the graph backend (§4.1 step 4), `not_deployed`
+triggers the legacy fallback, `not_found` renders the no-match page, and the other kinds are re-raised as
+`LineaiApiError` (`invalid_json` → `invalid_response`) with
+`endpoint=/api/ai-retrieval/graph/impact`.
 
 ### 7.3 Everything else
 
@@ -439,6 +489,7 @@ Every variable actually read by the code:
 | `LINEAI_MV_CACHE_TTL` | `300` (s) | `utils.py` | Materialized-view resolution cache lifetime (workspace name / server default → view id; new in PR #61) |
 | `LINEAI_REQUEST_TIMEOUT` | `120.0` (s) | `utils.py` (+ echoed in error text) | Overall httpx request timeout for every API call |
 | `LINEAI_CONNECT_TIMEOUT` | `30.0` (s) | `utils.py` | httpx connect timeout |
+| `LINEAI_METHOD_IMPACT_BACKEND` | `graph` | `handlers/method_impact.py` (per call) | `graph`: bounded graph impact endpoint with legacy fallback on a route-missing 404 (an entity 404 is a no-match page); `legacy`: always the unbounded `/api/dependency/impact/full` list (LIN-870) |
 | `LINEAI_TEST_MODE` | unset | `server.py`, `test/` | Any value skips `load_dotenv()` so tests fully control the environment |
 | `LINEAI_GRAPH_E2E_REQUIRED` | unset | `test/integration_test_graph.py` only | `1` turns "graph routes return 404" from test *skip* into test *failure* |
 
@@ -480,7 +531,8 @@ server restart.
 
 ## 10. Tests
 
-- **Unit** (CI, mocked HTTP; substantially expanded by PR #61 to 93 tests):
+- **Unit** (CI, mocked HTTP; 93 tests after PR #61, 123 after LIN-870 — class
+  selection table, graph backend / fallback / partiality, status notes):
   `unit_test_environment.py` (2: env handling),
   `unit_test_utils.py` (53: auth/retry/`expires_in`, `_authed_request`, MV
   resolver + cache, caching asymmetries, UR detection/extraction/rendering,
@@ -582,10 +634,11 @@ require the bearer token (`@PreAuthorize` admin-or-user).
 | all tools (no workspace specified) | `GET /api/materialized-view/default` | `MaterializedViewController` (`@GetMapping("/default")`) → `MaterializedViewService` | **Single-call** resolution of the server's default (primary) workspace's latest finished view id (the `data` field is the bare id); cached via `_mv_cache`; 404 → `LineaiApiError('mv_no_default')` |
 | `lineai-method-impact` | `POST /api/ai-retrieval/search/shortname` | `AIRetrievalController.searchByShortname` → `AIRetrievalServiceImpl.findByShortname` → `BaseNodeSearchRepositoryCustomImpl.findNodesByShortname` | Exact `shortName` match on method-entity nodes in the MV; 404 on zero rows. Cached per `mv_id:short_name` (non-empty results only), `LINEAI_METHOD_CACHE_TTL` 300 s; maps to §7.1 error kinds; 404/empty-200 → honest no-match page (LIN-699, resolved). May return UnresolvedReference rows (neo4cape #1860) |
 | `lineai-database-impact` | `POST /api/ai-retrieval/search/{table\|column\|view}` | `AIRetrievalController.searchForTableNodes` / `searchForColumnNodes` / `searchForViewNodes` → `AIRetrievalServiceImpl.find{Table,Column,View}Nodes…` (same repository) | Uncached; returns `(results, error_kind)` — errors rendered honestly, no longer swallowed to `[]` (finding 2, resolved). May return UnresolvedReference rows (neo4cape #1860) |
-| `lineai-method-impact`, `lineai-database-impact` | `GET /api/dependency/impact/full/{id}/list?viewId=` | `DependencyController.findDependencyImpact2` → `ImpactService.getImpactData` | Full incoming-relationship chain for the node. The resolved MV id **is now sent as `viewId`** to scope the traversal; cached per `{id}:{mv_id}`, `LINEAI_IMPACT_CACHE_TTL` 300 s; failures raise typed `LineaiApiError`s (§7.3) |
+| `lineai-method-impact` (default since LIN-870) | `POST /api/ai-retrieval/graph/impact` | `AIGraphMcpController.impact` → `AIGraphMcpServiceImpl.impact` → `AIGraphMcpRepositoryImpl.findBoundedImpact` | `{seedNodeIds:[id], direction:"upstream", depth}`; bounded (depth ≤ 10, 500 nodes / 2000 relationships, 60 s query timeout); `status partial` + `truncated_at_*` when capped; cached per `node:mv:direction:depth`; 404 → legacy fallback below |
+| `lineai-method-impact` (legacy fallback / `LINEAI_METHOD_IMPACT_BACKEND=legacy`), `lineai-database-impact` | `GET /api/dependency/impact/full/{id}/list?viewId=` | `DependencyController.findDependencyImpact2` → `ImpactService.getImpactData` | Full incoming-relationship chain for the node. The resolved MV id **is now sent as `viewId`** to scope the traversal; cached per `{id}:{mv_id}`, `LINEAI_IMPACT_CACHE_TTL` 300 s; failures raise typed `LineaiApiError`s (§7.3) |
 | `lineai-graph-capabilities` | `GET /api/ai-retrieval/graph/capabilities?materializedViewId=` | `AIGraphMcpController.capabilities` → `AIGraphMcpServiceImpl` | Graph tier; uncached; §7.2 error kinds (404 → `not_deployed`) |
-| `lineai-graph-search` | `POST /api/ai-retrieval/graph/search` | `AIGraphMcpController.search` → `AIGraphMcpServiceImpl.search` | camelCase body; uncached; §7.2 |
-| `lineai-graph-impact` | `POST /api/ai-retrieval/graph/impact` | `AIGraphMcpController.impact` → `AIGraphMcpServiceImpl.impact` | "Impact subgraph from seed node ids (merged, capped)"; uncached; §7.2 |
+| `lineai-graph-search` | `POST /api/ai-retrieval/graph/search` | `AIGraphMcpController.search` → `AIGraphMcpServiceImpl.search` → `AIGraphMcpRepositoryImpl.searchRanked` | camelCase body; LIN-870: ranked before paging, `hits[]`, real `totalHitCount`, `scanSpace` filter, `preferLatestScan`; uncached; §7.2 |
+| `lineai-graph-impact` | `POST /api/ai-retrieval/graph/impact` | `AIGraphMcpController.impact` → `AIGraphMcpServiceImpl.impact` | LIN-870: bounded directional subgraph (`direction`, `depth` default 3 max 10, `maxNodes`/`maxRelationships`), `status partial` when truncated; uncached; §7.2 |
 | `lineai-graph-path-explain` | `POST /api/ai-retrieval/graph/path` | `AIGraphMcpController.path` → `AIGraphMcpServiceImpl.path` | Shortest path within the MV; uncached; §7.2 |
 | `lineai-graph-validate-change-scope` | `POST /api/ai-retrieval/graph/validate-change-scope` | `AIGraphMcpController.validateChangeScope` → `AIGraphMcpServiceImpl.validateChangeScope` | Deterministic heuristics per the controller's `@Operation` summary; uncached; §7.2 |
 | `lineai-graph-owners` | `POST /api/ai-retrieval/graph/owners` | `AIGraphMcpController.owners` → `AIGraphMcpServiceImpl.owners` | "Owner-like fields from node properties (best-effort)"; uncached; §7.2 |

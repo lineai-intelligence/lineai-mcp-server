@@ -988,6 +988,19 @@ class TestUnresolvedReferences(unittest.TestCase):
         data = {'data': {'nodes': [CALLER_NODE], 'relationships': []}}
         self.assertEqual(utils.extract_unresolved_references(data), [])
 
+    def test_strip_unused_node_properties_in_place_dict(self):
+        data = {'data': {'nodes': [
+            {'id': 'n-1', 'properties': {'id': 'n-1', 'shortName': 'x', 'keep': 1, 'agentIds': []}},
+            json.loads(json.dumps(UR_IMPACT_DATA['data']['nodes'][1])),
+        ]}}
+        out = utils.strip_unused_node_properties(data)
+        self.assertIs(out, data)
+        self.assertEqual(data['data']['nodes'][0]['properties'], {'keep': 1})
+        self.assertIn('id', data['data']['nodes'][1]['properties'])
+        self.assertEqual(utils.strip_unused_node_properties({}), {})
+        self.assertEqual(utils.strip_unused_node_properties({'data': None}), {'data': None})
+        self.assertIsNone(utils.strip_unused_node_properties(None))
+
     def test_strip_unused_properties_skips_ur_nodes(self):
         response = Mock()
         response.text = json.dumps(UR_IMPACT_DATA)

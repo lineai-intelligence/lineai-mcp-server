@@ -15,6 +15,7 @@ handler modules' import sites (``handlers.method_impact.*`` etc.).
 """
 
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -30,7 +31,15 @@ import mcp.types as types
 import lineai_mcp_server.utils as utils_module
 from lineai_mcp_server.utils import LineaiApiError
 from lineai_mcp_server.handlers import handle_call_tool, handle_list_tools
-from lineai_mcp_server.handlers.method_impact import handle_method_impact
+from lineai_mcp_server.handlers.method_impact import (
+    class_fqn,
+    class_key,
+    class_match_rank,
+    clamp_depth,
+    graph_impact_to_impact_data,
+    handle_method_impact,
+    select_method_node,
+)
 from lineai_mcp_server.handlers.database_impact import handle_database_impact
 
 
@@ -105,6 +114,54 @@ def _impact_with_ur() -> dict:
         {'startId': 'n-1', 'endId': 'ur-1', 'type': 'INVOKES_METHOD',
          'id': 'null', 'contains': False, 'group': False})
     return data
+
+
+# One class only: the no-`class` success path (two classes is an ambiguity page since LIN-870).
+WIDGET_ONLY = [SEARCH_NODES[0]]
+
+# LIN-870: the graph impact endpoint's envelope for the same subgraph as IMPACT_DATA.
+GRAPH_IMPACT_DATA = {
+    'status': 'ok',
+    'assumptionsApplied': ['depth_defaulted_to_3'],
+    'truncated': False,
+    'depth': 3,
+    'direction': 'upstream',
+    'nodeCount': 2,
+    'staticAnalysisGap': False,
+    'nodes': IMPACT_DATA['data']['nodes'],
+    'relationships': IMPACT_DATA['data']['relationships'],
+}
+
+
+def _graph_ok(data=None):
+    return ({'data': data if data is not None else GRAPH_IMPACT_DATA}, 200, None, '')
+
+
+def _graph_partial():
+    data = json.loads(json.dumps(GRAPH_IMPACT_DATA))
+    data['status'] = 'partial'
+    data['truncated'] = True
+    data['assumptionsApplied'] = ['depth_defaulted_to_3', 'truncated_at_500_nodes']
+    data['relationships'] = []
+    return _graph_ok(data)
+
+
+# The dogfood case behind LIN-870: `run()` on AnalyzeCommands exists in three agent repositories.
+# Identities use neo4cape's real Java shape: <archive>.jar|<File>.class|<fqn>|<signature>
+# (ClassFileAnalyzerUtil.getIdentityForMethodNode); 'alt-1' keeps the archive-less shape.
+SQL_RUN = 'cc-sql-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.sql.shell.AnalyzeCommands|run()'
+JAVA_RUN = 'cc-java-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.java.shell.AnalyzeCommands|run()'
+SRC_RUN = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|run()'
+SRC_RUN_STRING = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|run(String)'
+ANALYZE_COMMANDS_NODES = [
+    {'id': 'sql-1', 'name': 'run', 'identity': SQL_RUN, 'properties': {'id': 'sql-1'}},
+    {'id': 'java-1', 'name': 'run', 'identity': JAVA_RUN, 'properties': {'id': 'java-1'}},
+    {'id': 'src-1', 'name': 'run', 'identity': SRC_RUN, 'properties': {'id': 'src-1'}},
+    {'id': 'src-2', 'name': 'run', 'identity': SRC_RUN_STRING, 'properties': {'id': 'src-2'}},
+    {'id': 'alt-1', 'name': 'run', 'identity': 'com.acme.alt.AnalyzeCommands|run()',
+     'properties': {'id': 'alt-1'}},
+    json.loads(json.dumps(UR_NODE)),
+]
 
 
 # --- lineai-method-impact -----------------------------------------------------
@@ -191,44 +248,74 @@ class TestMethodImpactHandler(TestCase):
         self.assertIn('com.acme|Widget|doThing()', text)
         self.assertIn('com.acme|Gadget|doThing()', text)
 
-    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
     @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
-    def test_class_match_is_case_insensitive_substring(self, mock_resolve, mock_nodes, mock_impact):
+    def test_class_match_is_case_insensitive_simple_name(self, mock_resolve, mock_nodes, mock_impact):
         mock_resolve.return_value = 'mv-1'
         mock_nodes.return_value = (SEARCH_NODES, None)
-        mock_impact.return_value = json.dumps(IMPACT_DATA)
+        mock_impact.return_value = _graph_ok()
 
         result = handle_method_impact({'method': 'doThing', 'class': 'gadget'})
 
-        # second search node matched; impact fetched with ITS properties.id and the mv id
-        mock_impact.assert_called_once_with('n-2', 'mv-1')
-        self.assertIn('# Impact Analysis for Method: `doThing`', _text(result))
+        # second search node matched; the bounded graph impact is fetched with ITS id, upstream, depth 3
+        mock_impact.assert_called_once_with('n-2', 'mv-1', direction='upstream', depth=3)
+        text = _text(result)
+        self.assertIn('# Impact Analysis for Method: `doThing`', text)
+        self.assertIn('- **Class**: `com.acme.Gadget`', text)
+        self.assertIn('simple class name matched exactly', text)
 
-    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
     @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
     def test_success_reports_dependents_and_mv(self, mock_resolve, mock_nodes, mock_impact):
         mock_resolve.return_value = 'mv-1'
-        mock_nodes.return_value = (SEARCH_NODES, None)
-        mock_impact.return_value = json.dumps(IMPACT_DATA)
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_impact.return_value = _graph_ok()
 
         result = handle_method_impact({'method': 'doThing'})
 
         self.assertNotIsInstance(result, types.CallToolResult)
         text = _text(result)
-        mock_impact.assert_called_once_with('n-1', 'mv-1')
+        mock_impact.assert_called_once_with('n-1', 'mv-1', direction='upstream', depth=3)
         self.assertIn('# Impact Analysis for Method: `doThing`', text)
         self.assertIn('`mv-1`', text)
         self.assertIn('`callerMethod` (JavaMethodEntity) via `INVOKES_METHOD`', text)
+        self.assertIn('## Impact scope', text)
+        self.assertIn('- **Source**: graph (`POST /api/ai-retrieval/graph/impact`, direction `upstream`, depth 3)', text)
+        self.assertIn('- **Status**: `ok`', text)
+        self.assertIn('- **Static-analysis gap**: no', text)
+        self.assertIn('- **Server notes**: `depth_defaulted_to_3`', text)
+        self.assertIn('- **Class match**: the only method with that short name', text)
 
-    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_no_class_with_two_classes_is_an_ambiguity_page(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (SEARCH_NODES, None)
+
+        result = handle_method_impact({'method': 'doThing'})
+
+        self.assertIsInstance(result, types.CallToolResult)
+        self.assertTrue(result.isError)
+        text = _text(result)
+        self.assertIn('# Ambiguous Method: `doThing`', text)
+        self.assertIn('**2 classes**', text)
+        self.assertIn('- `com.acme.Gadget`', text)
+        self.assertIn('- `com.acme.Widget`', text)
+        self.assertIn('fully-qualified class name', text)
+        mock_impact.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
     @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
     def test_unresolved_references_section_present(self, mock_resolve, mock_nodes, mock_impact):
         mock_resolve.return_value = 'mv-1'
-        mock_nodes.return_value = (SEARCH_NODES, None)
-        mock_impact.return_value = json.dumps(_impact_with_ur())
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        with_ur = _impact_with_ur()['data']
+        data = dict(GRAPH_IMPACT_DATA, nodes=with_ur['nodes'], relationships=with_ur['relationships'])
+        mock_impact.return_value = _graph_ok(data)
 
         text = _text(handle_method_impact({'method': 'doThing'}))
 
@@ -236,17 +323,344 @@ class TestMethodImpactHandler(TestCase):
         self.assertIn('MethodEntity', text)
         self.assertIn('INVOKES_METHOD', text)
 
-    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
     @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
     def test_unresolved_references_section_absent_when_none(self, mock_resolve, mock_nodes, mock_impact):
         mock_resolve.return_value = 'mv-1'
-        mock_nodes.return_value = (SEARCH_NODES, None)
-        mock_impact.return_value = json.dumps(IMPACT_DATA)
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_impact.return_value = _graph_ok()
 
         text = _text(handle_method_impact({'method': 'doThing'}))
 
         self.assertNotIn('Unresolved References', text)
+
+    # --- LIN-870: graph backend, partiality, fallback, depth -----------------
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_fqn_class_selects_the_right_repository(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (ANALYZE_COMMANDS_NODES, None)
+        mock_impact.return_value = _graph_ok()
+
+        text = _text(handle_method_impact({
+            'method': 'run', 'class': 'com.codelogic.agent.source.shell.shell.AnalyzeCommands'}))
+
+        # the source-agent node, not the sql-agent one that a substring match picks first
+        mock_impact.assert_called_once_with('src-1', 'mv-1', direction='upstream', depth=3)
+        self.assertIn('- **Class**: `com.codelogic.agent.source.shell.shell.AnalyzeCommands`', text)
+        self.assertIn('several signatures in one class', text)
+        self.assertIn(f'- **Overloads in this class**: `{SRC_RUN_STRING}`', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_simple_class_name_in_several_repositories_is_ambiguous(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (ANALYZE_COMMANDS_NODES, None)
+
+        result = handle_method_impact({'method': 'run', 'class': 'AnalyzeCommands'})
+
+        self.assertTrue(result.isError)
+        text = _text(result)
+        self.assertIn('# Ambiguous Method: `run`', text)
+        self.assertIn('**4 classes**', text)
+        self.assertIn('com.codelogic.agent.source.shell.shell.AnalyzeCommands', text)
+        self.assertNotIn('ur-1', text)
+        mock_impact.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_foreign_fqn_is_not_silently_replaced(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (ANALYZE_COMMANDS_NODES, None)
+
+        result = handle_method_impact({'method': 'run', 'class': 'com.elsewhere.AnalyzeCommands'})
+
+        self.assertTrue(result.isError)
+        text = _text(result)
+        self.assertIn('no match belongs to the class `com.elsewhere.AnalyzeCommands`', text)
+        self.assertIn(SQL_RUN, text)
+        self.assertIn('Do not report `com.elsewhere.AnalyzeCommands` as "not indexed"', text)
+        mock_impact.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_partial_graph_result_is_rendered_as_a_lower_bound(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_impact.return_value = _graph_partial()
+
+        text = _text(handle_method_impact({'method': 'doThing'}))
+
+        self.assertIn('- **Status**: `partial` (truncated_at_500_nodes) — the counts below are a LOWER BOUND', text)
+        self.assertIn('the impact result is PARTIAL (see Impact scope) — this is not evidence of isolation', text)
+        self.assertNotIn('The change appears to be isolated', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_static_analysis_gap_is_noted(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        data = dict(GRAPH_IMPACT_DATA, staticAnalysisGap=True)
+        mock_impact.return_value = _graph_ok(data)
+
+        text = _text(handle_method_impact({'method': 'doThing'}))
+
+        self.assertIn('- **Static-analysis gap**: yes', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_graph_404_falls_back_to_legacy(self, mock_resolve, mock_nodes, mock_graph, mock_legacy):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_graph.return_value = (None, 404, 'not_deployed', '')
+        mock_legacy.return_value = json.dumps(IMPACT_DATA)
+
+        text = _text(handle_method_impact({'method': 'doThing'}))
+
+        mock_legacy.assert_called_once_with('n-1', 'mv-1')
+        self.assertIn('- **Source**: legacy (`GET /api/dependency/impact/full/{id}/list`, full incoming chain) — fallback reason: graph impact endpoint returned HTTP 404', text)
+        self.assertIn('`callerMethod` (JavaMethodEntity) via `INVOKES_METHOD`', text)
+        self.assertNotIn('Static-analysis gap', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_legacy_backend_env_skips_the_graph_endpoint(self, mock_resolve, mock_nodes, mock_graph, mock_legacy):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_legacy.return_value = json.dumps(IMPACT_DATA)
+
+        with patch.dict(os.environ, {'LINEAI_METHOD_IMPACT_BACKEND': 'legacy'}):
+            text = _text(handle_method_impact({'method': 'doThing'}))
+
+        mock_graph.assert_not_called()
+        mock_legacy.assert_called_once_with('n-1', 'mv-1')
+        self.assertIn('fallback reason: LINEAI_METHOD_IMPACT_BACKEND=legacy', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_graph_timeout_is_a_typed_error_not_a_legacy_retry(self, mock_resolve, mock_nodes, mock_graph, mock_legacy):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_graph.return_value = (None, 0, 'timeout', 'read timed out')
+
+        with self.assertRaises(utils_module.LineaiApiError) as ctx:
+            handle_method_impact({'method': 'doThing'})
+
+        self.assertEqual(ctx.exception.kind, 'timeout')
+        self.assertEqual(ctx.exception.endpoint, '/api/ai-retrieval/graph/impact')
+        mock_legacy.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_graph_entity_404_is_a_no_match_page_not_a_legacy_fallback(self, mock_resolve, mock_nodes, mock_graph, mock_legacy):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_graph.return_value = (None, 404, 'not_found', "Unable to locate node WITH id 'n-1'")
+
+        result = handle_method_impact({'method': 'doThing'})
+
+        self.assertIsInstance(result, types.CallToolResult)
+        self.assertTrue(result.isError)
+        text = _text(result)
+        self.assertIn("Unable to locate node WITH id 'n-1'", text)
+        self.assertIn('the legacy impact endpoint was NOT used as a fallback', text)
+        self.assertIn('not evidence that the method is isolated', text)
+        mock_legacy.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_older_server_without_depth_is_reported_as_unbounded(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        # pre-LIN-870 GraphMcpImpactResponse: no depth/direction fields, reserved markers
+        old = {
+            'status': 'ok',
+            'assumptionsApplied': [
+                'direction_parameter_reserved_uses_full_impact_subgraph',
+                'depth_parameter_reserved_uses_full_impact_subgraph',
+            ],
+            'nodeCount': 2,
+            'staticAnalysisGap': False,
+            'nodes': IMPACT_DATA['data']['nodes'],
+            'relationships': IMPACT_DATA['data']['relationships'],
+        }
+        mock_impact.return_value = _graph_ok(old)
+
+        text = _text(handle_method_impact({'method': 'doThing', 'depth': 2}))
+
+        self.assertIn('on an OLDER server without LIN-870: `depth` and `direction` were ignored', text)
+        self.assertNotIn('direction `upstream`, depth 2', text)
+        self.assertNotIn('depth 3)', text)
+        self.assertIn('- **Server notes**: `direction` was ignored (older server: full impact subgraph); `depth` was ignored (older server: full impact subgraph)', text)
+        self.assertNotIn('`depth_parameter_reserved_uses_full_impact_subgraph`', text)
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_depth_is_forwarded_and_clamped(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_impact.return_value = _graph_ok()
+
+        handle_method_impact({'method': 'doThing', 'depth': 2})
+        mock_impact.assert_called_with('n-1', 'mv-1', direction='upstream', depth=2)
+
+        handle_method_impact({'method': 'doThing', 'depth': 99})
+        mock_impact.assert_called_with('n-1', 'mv-1', direction='upstream', depth=10)
+
+        handle_method_impact({'method': 'doThing', 'depth': 0})
+        mock_impact.assert_called_with('n-1', 'mv-1', direction='upstream', depth=1)
+
+        with self.assertRaises(ValueError):
+            handle_method_impact({'method': 'doThing', 'depth': 'deep'})
+
+
+class TestMethodNodeSelection(unittest.TestCase):
+    """LIN-870: pure class-selection rules behind lineai-method-impact."""
+
+    def test_class_key_drops_the_signature_segment(self):
+        self.assertEqual(class_key('com.acme|Widget|doThing()'), 'com.acme|Widget')
+        self.assertEqual(class_key('com.acme.Widget|doThing(String)'), 'com.acme.Widget')
+        self.assertEqual(class_key('nothing-here'), 'nothing-here')
+        self.assertEqual(class_key(None), '')
+
+    def test_class_fqn_drops_archive_and_class_file_segments(self):
+        self.assertEqual(class_fqn(SRC_RUN), 'com.codelogic.agent.source.shell.shell.AnalyzeCommands')
+        self.assertEqual(class_fqn('com.acme|Widget|doThing()'), 'com.acme.Widget')
+        self.assertEqual(class_fqn('com.acme.alt.AnalyzeCommands|run()'), 'com.acme.alt.AnalyzeCommands')
+        self.assertEqual(class_fqn('app.war|lib/x.jar|Outer$Inner.class|com.acme.Outer$Inner|m()'), 'com.acme.Outer$Inner')
+        self.assertEqual(class_fqn(None), '')
+
+    def test_class_match_rank_real_identity_shape(self):
+        """The ticket's case: the identity carries the archive and .class prefix (review on PR #63)."""
+        fqn = 'com.codelogic.agent.source.shell.shell.AnalyzeCommands'
+        real = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|analyze()'
+        self.assertEqual(class_match_rank(real, fqn), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, fqn), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, fqn.upper()), 3)
+        self.assertEqual(class_match_rank(SQL_RUN, fqn), 2)      # same simple name, other repository
+        self.assertEqual(class_match_rank(JAVA_RUN, 'com.codelogic.agent.java.shell.AnalyzeCommands'), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, 'AnalyzeCommands'), 2)
+        self.assertEqual(class_match_rank(SRC_RUN, 'Commands'), 1)
+        # inner classes in the real shape
+        inner = 'x-1.0.jar|Outer$Inner.class|com.acme.Outer$Inner|m()'
+        self.assertEqual(class_match_rank(inner, 'com.acme.Outer.Inner'), 3)
+        self.assertEqual(class_match_rank(inner, 'com.acme.Outer$Inner'), 3)
+        # the archive name must never satisfy the FQN (it is dotted, so it exercises the FQN rules)
+        self.assertLess(class_match_rank(SRC_RUN, 'codelogic-source-agent-1.0.jar'), 3)
+        self.assertLess(class_match_rank(SRC_RUN, 'AnalyzeCommands.class'), 3)
+
+    def test_class_match_rank_table(self):
+        src = 'com.codelogic.agent.source.shell.shell|AnalyzeCommands|run()'
+        self.assertEqual(class_match_rank(src, 'com.codelogic.agent.source.shell.shell.AnalyzeCommands'), 3)
+        self.assertEqual(class_match_rank(src, 'COM.codelogic.agent.source.shell.shell.analyzecommands'), 3)
+        self.assertEqual(class_match_rank('com.acme.alt.AnalyzeCommands|run()', 'com.acme.alt.AnalyzeCommands'), 3)
+        self.assertEqual(class_match_rank('com.acme|Outer$Inner|run()', 'com.acme.Outer.Inner'), 3)
+        self.assertEqual(class_match_rank('com.acme|Outer|Inner|run()', 'com.acme.Outer$Inner'), 3)
+        self.assertEqual(class_match_rank(src, 'com.codelogic.agent.sql.shell.AnalyzeCommands'), 2)
+        self.assertEqual(class_match_rank(src, 'AnalyzeCommands'), 2)
+        self.assertEqual(class_match_rank(src, 'analyzecommands'), 2)
+        self.assertEqual(class_match_rank(src, 'Commands'), 1)
+        self.assertEqual(class_match_rank(src, 'shell'), 1)
+        self.assertEqual(class_match_rank(src, 'Widget'), 0)
+        self.assertEqual(class_match_rank(None, 'Widget'), 0)
+
+    def test_fqn_selects_exactly_that_class_with_overloads(self):
+        chosen, outcome, candidates = select_method_node(
+            ANALYZE_COMMANDS_NODES, 'com.codelogic.agent.source.shell.shell.AnalyzeCommands')
+        self.assertEqual(chosen['id'], 'src-1')
+        self.assertEqual(outcome, 'overloads')
+        self.assertEqual([c['id'] for c in candidates], ['src-1', 'src-2'])
+
+    def test_fqn_single_signature(self):
+        chosen, outcome, _ = select_method_node(ANALYZE_COMMANDS_NODES, 'com.codelogic.agent.java.shell.AnalyzeCommands')
+        self.assertEqual(chosen['id'], 'java-1')
+        self.assertEqual(outcome, 'fqn')
+
+    def test_fqn_alternative_identity_shape(self):
+        chosen, outcome, _ = select_method_node(ANALYZE_COMMANDS_NODES, 'com.acme.alt.AnalyzeCommands')
+        self.assertEqual(chosen['id'], 'alt-1')
+        self.assertEqual(outcome, 'fqn')
+
+    def test_simple_name_across_repositories_is_ambiguous(self):
+        chosen, outcome, candidates = select_method_node(ANALYZE_COMMANDS_NODES, 'AnalyzeCommands')
+        self.assertIsNone(chosen)
+        self.assertEqual(outcome, 'ambiguous')
+        self.assertEqual(len(candidates), 5)
+
+    def test_foreign_fqn_is_fqn_not_found_with_same_simple_name_candidates(self):
+        chosen, outcome, candidates = select_method_node(ANALYZE_COMMANDS_NODES, 'com.elsewhere.AnalyzeCommands')
+        self.assertIsNone(chosen)
+        self.assertEqual(outcome, 'fqn_not_found')
+        self.assertEqual(len(candidates), 5)
+
+    def test_no_class_with_several_classes_is_ambiguous(self):
+        chosen, outcome, _ = select_method_node(ANALYZE_COMMANDS_NODES, None)
+        self.assertIsNone(chosen)
+        self.assertEqual(outcome, 'ambiguous')
+
+    def test_no_class_single_class_picks_first_and_lists_overloads(self):
+        nodes = [ANALYZE_COMMANDS_NODES[2], ANALYZE_COMMANDS_NODES[3]]
+        chosen, outcome, candidates = select_method_node(nodes, None)
+        self.assertEqual(chosen['id'], 'src-1')
+        self.assertEqual(outcome, 'overloads')
+        self.assertEqual(len(candidates), 2)
+        chosen, outcome, _ = select_method_node(nodes[:1], None)
+        self.assertEqual(outcome, 'single')
+
+    def test_unresolved_references_are_never_chosen(self):
+        chosen, outcome, candidates = select_method_node([json.loads(json.dumps(UR_NODE))], None)
+        self.assertIsNone(chosen)
+        self.assertEqual(outcome, 'no_class_match')
+        self.assertEqual(candidates, [])
+
+    def test_substring_match_is_still_accepted_when_unique(self):
+        chosen, outcome, _ = select_method_node(SEARCH_NODES, 'gadg')
+        self.assertEqual(chosen['id'], 'n-2')
+        self.assertEqual(outcome, 'substring')
+        chosen, outcome, _ = select_method_node(SEARCH_NODES, 'NoSuchClass')
+        self.assertIsNone(chosen)
+        self.assertEqual(outcome, 'no_class_match')
+
+    def test_clamp_depth(self):
+        self.assertEqual(clamp_depth(None), 3)
+        self.assertEqual(clamp_depth(''), 3)
+        self.assertEqual(clamp_depth('2'), 2)
+        self.assertEqual(clamp_depth(0), 1)
+        self.assertEqual(clamp_depth(11), 10)
+        with self.assertRaises(ValueError):
+            clamp_depth('x')
+
+    def test_graph_payload_maps_to_the_legacy_shape_and_is_stripped(self):
+        payload = {'data': dict(GRAPH_IMPACT_DATA, nodes=[{
+            'id': 'n-1', 'identity': 'com.acme|Widget|doThing()', 'name': 'doThing',
+            'primaryLabel': 'JavaMethodEntity',
+            'properties': {'id': 'n-1', 'shortName': 'doThing', 'statistics.cyclomaticComplexity': 2, 'sourceScanContextIds': ['x']},
+        }])}
+        mapped = graph_impact_to_impact_data(payload)
+        self.assertEqual(set(mapped), {'data'})
+        node = mapped['data']['nodes'][0]
+        self.assertEqual(node['id'], 'n-1')
+        self.assertEqual(node['properties'], {'statistics.cyclomaticComplexity': 2})
+        self.assertEqual(mapped['data']['relationships'][0]['startId'], 'c-1')
+        # bare (un-enveloped) payloads are tolerated
+        self.assertEqual(graph_impact_to_impact_data(GRAPH_IMPACT_DATA)['data']['nodes'][0]['id'], 'n-1')
 
 
 # --- lineai-database-impact ---------------------------------------------------
@@ -466,6 +880,25 @@ class TestToolSchemas(unittest.IsolatedAsyncioTestCase):
         schema = self.tools['lineai-method-impact'].inputSchema
         self.assertEqual(schema['required'], ['method'])
         self.assertIn('class', schema['properties'])
+        # LIN-870: bounded depth, fully-qualified class guidance
+        self.assertEqual(schema['properties']['depth']['minimum'], 1)
+        self.assertEqual(schema['properties']['depth']['maximum'], 10)
+        self.assertIn('fully-qualified', schema['properties']['class']['description'])
+        self.assertIn('partial', self.tools['lineai-method-impact'].description)
+
+    async def test_graph_descriptions_explain_ranking_and_partiality(self):
+        search = self.tools['lineai-graph-search']
+        self.assertIn('RANKED', search.description)
+        self.assertIn('matchKind', search.description)
+        self.assertIn('totalHitCount', search.description)
+        self.assertIn("report 'not indexed' ONLY when", search.description)
+        self.assertIn('description', search.inputSchema['properties']['prefer_latest_scan'])
+        impact = self.tools['lineai-graph-impact']
+        self.assertIn('LOWER BOUND', impact.description)
+        self.assertEqual(impact.inputSchema['properties']['depth']['maximum'], 10)
+        self.assertIn('upstream', impact.inputSchema['properties']['direction']['description'])
+        for name, tool in self.tools.items():
+            self.assertTrue(tool.description.strip(), f'{name} has an empty description')
 
     async def test_all_tools_accept_workspace_and_mv_id(self):
         for name, tool in self.tools.items():

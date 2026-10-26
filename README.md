@@ -19,7 +19,8 @@ The server implements **eight** tools: two impact tools plus six **graph** tools
 
 #### Code Analysis Tools
 - **lineai-method-impact**: Pulls an impact assessment from the Lineai server's APIs for your code.
-  - Takes the given "method" that you're working on; "class" is optional (a case-insensitive filter used when several matches exist).
+  - Takes the given "method" that you're working on. Pass the **fully-qualified** class name in "class" (e.g. `com.acme.shell.AnalyzeCommands`) when the simple name may exist in several repositories: a fully-qualified class selects exactly that class, while a simple name that matches several classes returns an ambiguity page listing the candidates instead of silently analyzing another repository's class.
+  - The impact is a **bounded upstream traversal** from the Lineai graph impact endpoint (`depth` argument, default 3, max 10). The report's **Impact scope** section says where the data came from (graph, or the legacy full-chain endpoint when the graph endpoint is not deployed) and whether it is complete (`ok`) or a lower bound (`partial`) — a partial result is never "no impact".
 - **lineai-database-impact**: Analyzes impacts between code and database entities.
   - Takes the database entity type (column, table, or view) and its name.
 
@@ -30,8 +31,8 @@ All eight tools also accept optional `workspace` and `materialized_view_id` argu
 These call `POST` / `GET` endpoints under `/api/ai-retrieval/graph/` on the same host as `LINEAI_SERVER_HOST`, using the same session auth as other MCP tools. If graph routes are not deployed, the server returns a clear “graph not available” style message (often after HTTP 404).
 
 - **lineai-graph-capabilities**: `GET` — discover supported relationship types, limits, and flags for the workspace materialized view (`materializedViewId` resolved like every other tool: explicit id → `workspace` argument → `LINEAI_WORKSPACE_NAME` → server default).
-- **lineai-graph-search**: Search nodes by text `query` / `q` and/or `identity_prefix`; optional `scan_space`, `limit`, etc.
-- **lineai-graph-impact**: Dependency / blast-radius style traversal from `seed_node_ids`.
+- **lineai-graph-search**: Search nodes by text `query` / `q` and/or `identity_prefix`; optional `scan_space` (scan space id or display name), `prefer_latest_scan`, `limit`. Results are **ranked by the server** (exact short name → exact fully-qualified name → class-like labels → text score → newest scan) and `data.hits[i]` describes `data.nodes[i]` (`score`, `matchKind`, `labelTier`); `data.totalHitCount` is the real total, so a full page means "narrow the query", not "absent".
+- **lineai-graph-impact**: Bounded dependency / blast-radius traversal from `seed_node_ids` with `direction` (`upstream` = what depends on the seeds, `downstream`, `both`) and `depth` (server default 3, max 10). The response carries `status` (`ok` | `partial`), `truncated`, `nodeCount`, `staticAnalysisGap` and `assumptionsApplied` markers; the tool prints a note above the JSON whenever the result is partial, degraded, or an older server ignored an option.
 - **lineai-graph-path-explain**: Shortest-path style explanation between `from_node_id` and `to_node_id`.
 - **lineai-graph-validate-change-scope**: Heuristic checklist / risk summary for a proposed change given seed nodes and `proposed_change_summary`.
 - **lineai-graph-owners**: Resolve a node by `node_id` or `identity_prefix` and surface property fields whose names contain `"owner"`.
@@ -345,8 +346,9 @@ The following environment variables can be configured to customize the behavior 
 - `LINEAI_METHOD_CACHE_TTL`: Method shortname-search result cache lifetime in seconds. Defaults to `300`.
 - `LINEAI_IMPACT_CACHE_TTL`: Impact-analysis result cache lifetime in seconds. Defaults to `300`.
 - `LINEAI_MV_CACHE_TTL`: Materialized-view resolution cache lifetime in seconds (workspace name / server default → view id). Defaults to `300`.
-- `LINEAI_REQUEST_TIMEOUT`: Overall HTTP request timeout in seconds for all Lineai API calls. Defaults to `120.0`.
+- `LINEAI_REQUEST_TIMEOUT`: Overall HTTP request timeout in seconds for all Lineai API calls. Defaults to `120.0`. Graph impact calls are bounded server-side (depth / node / relationship caps, 60 s query timeout), so a timeout here usually means the depth is too large — retry with `depth` 1–2.
 - `LINEAI_CONNECT_TIMEOUT`: HTTP connect timeout in seconds. Defaults to `30.0`.
+- `LINEAI_METHOD_IMPACT_BACKEND`: `graph` (default) fetches the `lineai-method-impact` subgraph from the bounded graph impact endpoint and falls back to the legacy `/api/dependency/impact/full` list only when the graph **route** is missing (a 404 without neo4cape's entity message); a 404 that names the node ("Unable to locate node …") is reported as a search/view disagreement instead, because the legacy traversal from an unknown id returns an empty result that would read as "isolated"; `legacy` forces the legacy endpoint (unbounded full incoming chain). Read per call.
 
 **Tests only**
 
@@ -386,6 +388,8 @@ If you're upgrading, make sure your Lineai server meets the minimum API version 
 
 **Graph tools**: Require your Lineai deployment to serve the graph endpoints under `/api/ai-retrieval/graph/`. Older or partial deployments may return 404; the MCP tools surface that as a clear error instead of opaque failures.
 
+**Ranked search / bounded impact (LIN-870)**: ranking, `hits`, the real `totalHitCount`, `scan_space` / `prefer_latest_scan`, and the `depth` / `direction` / `status: partial` impact contract need a Lineai server that includes neo4cape LIN-870. Against an older server the tools still work: search comes back in the server's unranked order, impact runs the full subgraph, and the ignored options are echoed as `*_not_implemented` / `*_reserved_*` markers that the tool renders as "`x` was ignored (older server)". `lineai-method-impact` falls back to the legacy impact endpoint automatically when the graph endpoint is missing.
+
 ## Debug Logging
 
 When `LINEAI_DEBUG_MODE=true`, debug files are written to the system temporary directory:
@@ -415,7 +419,7 @@ The project uses unittest for testing. You can run unit tests without any extern
 python -m unittest discover -s test -p "unit_*.py"
 ```
 
-Unit tests use mock data and don't require a connection to a Lineai server.
+Unit tests use mock data and don't require a connection to a Lineai server. `test/unit_test_handlers.py` includes the `TestMethodNodeSelection` table (the LIN-870 `AnalyzeCommands`-in-three-repositories case: fully-qualified class → the right repository, simple name → ambiguity page, foreign fully-qualified name → not-found page, unresolved references never chosen) and the graph-backend / legacy-fallback / partial-result handler cases; `test/unit_test_graph_tools.py` covers the partiality note and old-server markers.
 
 ### Integration Tests (Optional)
 
