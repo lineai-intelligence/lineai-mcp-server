@@ -348,7 +348,7 @@ The following environment variables can be configured to customize the behavior 
 - `LINEAI_MV_CACHE_TTL`: Materialized-view resolution cache lifetime in seconds (workspace name / server default → view id). Defaults to `300`.
 - `LINEAI_REQUEST_TIMEOUT`: Overall HTTP request timeout in seconds for all Lineai API calls. Defaults to `120.0`. Graph impact calls are bounded server-side (depth / node / relationship caps, 60 s query timeout), so a timeout here usually means the depth is too large — retry with `depth` 1–2.
 - `LINEAI_CONNECT_TIMEOUT`: HTTP connect timeout in seconds. Defaults to `30.0`.
-- `LINEAI_METHOD_IMPACT_BACKEND`: `graph` (default) fetches the `lineai-method-impact` subgraph from the bounded graph impact endpoint and falls back to the legacy `/api/dependency/impact/full` list only when the graph endpoint answers 404; `legacy` forces the legacy endpoint (unbounded full incoming chain). Read per call.
+- `LINEAI_METHOD_IMPACT_BACKEND`: `graph` (default) fetches the `lineai-method-impact` subgraph from the bounded graph impact endpoint and falls back to the legacy `/api/dependency/impact/full` list only when the graph **route** is missing (a 404 without neo4cape's entity message); a 404 that names the node ("Unable to locate node …") is reported as a search/view disagreement instead, because the legacy traversal from an unknown id returns an empty result that would read as "isolated"; `legacy` forces the legacy endpoint (unbounded full incoming chain). Read per call.
 
 **Tests only**
 

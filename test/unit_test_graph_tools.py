@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import mcp.types as types
 
+from lineai_mcp_server.graph_client import _graph_response_tuple, graph_error_message
 from lineai_mcp_server.handlers.graph_tools import (
     graph_status_note,
     handle_lineai_graph_capabilities,
@@ -142,6 +143,35 @@ class TestGraphTools(unittest.TestCase):
         self.assertIn("Static-analysis gap", note)
         self.assertNotIn("depth_defaulted_to_3", note)
         self.assertNotIn("Status:", note)
+
+    def test_404_route_missing_vs_entity_missing(self):
+        import json as _json
+
+        class R:
+            def __init__(self, code, text):
+                self.status_code, self.text = code, text
+
+            def json(self):
+                return _json.loads(self.text)
+
+        neo4cape_route = '{"status":"ERROR","error":{"code":"NOT_FOUND","message":"Resource not found /api/ai-retrieval/graph/impact"}}'
+        neo4cape_entity = '{"status":"ERROR","error":{"code":"NOT_FOUND","message":"Unable to locate node WITH id \'123\'"}}'
+        spring_default = '{"timestamp":"2026-10-26T19:00:00Z","status":404,"error":"Not Found","path":"/api/ai-retrieval/graph/impact"}'
+        self.assertEqual(_graph_response_tuple(R(404, neo4cape_route))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, spring_default))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, "<html>gateway</html>"))[2], "not_deployed")
+        self.assertEqual(_graph_response_tuple(R(404, ""))[2], "not_deployed")
+        payload, status, kind, snippet = _graph_response_tuple(R(404, neo4cape_entity))
+        self.assertEqual((payload, status, kind), (None, 404, "not_found"))
+        self.assertEqual(snippet, "Unable to locate node WITH id '123'")
+        self.assertEqual(_graph_response_tuple(R(200, '{"data": {}}'))[2], None)
+
+    def test_not_found_renders_a_graph_page_not_a_deployment_page(self):
+        text = graph_error_message("lineai-graph-impact", "/impact", "not_found", 404, "Unable to locate node WITH id '123'")
+        self.assertIn("# Graph node not found", text)
+        self.assertIn("Unable to locate node WITH id '123'", text)
+        self.assertNotIn("not deployed", text)
+        self.assertIn("Re-run `lineai-graph-search`", text)
 
     def test_status_note_tolerates_bare_and_odd_payloads(self):
         self.assertEqual(graph_status_note({"status": "ok", "assumptionsApplied": []}), "")

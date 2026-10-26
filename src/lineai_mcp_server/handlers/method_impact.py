@@ -20,6 +20,7 @@ import sys
 import time
 import mcp.types as types
 from .common import error_result, write_json_to_file, log_timing, DEBUG_MODE, LOGS_DIR
+from .graph_tools import _OLD_SERVER_MARKERS
 from .. import utils as lineai_utils
 from ..graph_client import get_graph_impact
 from ..utils import (
@@ -50,12 +51,29 @@ RANK_NONE = 0
 
 # --- class selection (pure helpers, unit-tested) ------------------------------
 
+# Identity segments that name an archive or a class file, not a class:
+# neo4cape's Java identities are ``<archive>.jar|<File>.class|<fqn>|<signature>``.
+_ARCHIVE_SUFFIXES = (".jar", ".war", ".ear", ".zip", ".class")
+
+
 def class_key(identity: str | None) -> str:
     """The identity minus its last ``|`` segment (the method signature) — one key per class."""
     identity = identity or ""
     if "|" not in identity:
         return identity
     return identity.rsplit("|", 1)[0]
+
+
+def class_fqn(identity: str | None) -> str:
+    """
+    The dotted class name an identity's class key stands for: archive and
+    class-file segments (``x.jar``, ``Foo.class``) are dropped, the rest joined
+    with ``.``. ``codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.acme.AnalyzeCommands|run()``
+    → ``com.acme.AnalyzeCommands``; ``com.acme|Widget|doThing()`` → ``com.acme.Widget``.
+    """
+    segments = [s for s in class_key(identity).split("|") if s]
+    kept = [s for s in segments if not s.lower().endswith(_ARCHIVE_SUFFIXES)]
+    return ".".join(kept or segments)
 
 
 def _normalize_class_path(value: str) -> str:
@@ -74,20 +92,29 @@ def class_match_rank(identity: str | None, class_name: str) -> int:
     """
     How well a method node's identity matches the requested class.
 
-    * ``RANK_FQN`` — the identity's class path equals the fully-qualified name
-      (``com.acme.shell|AnalyzeCommands|run()``, ``com.acme.shell.AnalyzeCommands|run()``
-      and ``com.acme|shell|AnalyzeCommands|run()`` all match ``com.acme.shell.AnalyzeCommands``);
+    * ``RANK_FQN`` — the identity names the fully-qualified class: neo4cape's real
+      ``agent-1.0.jar|AnalyzeCommands.class|com.acme.shell.AnalyzeCommands|run()`` (any ``|``
+      segment equals the FQN), as well as ``com.acme.shell|AnalyzeCommands|run()``,
+      ``com.acme.shell.AnalyzeCommands|run()`` and ``com.acme|shell|AnalyzeCommands|run()``
+      (the archive-less class path equals, or ends with, the FQN);
     * ``RANK_SIMPLE`` — the class path's last component equals the simple name (case-insensitive);
     * ``RANK_SUBSTRING`` — the simple name occurs somewhere in the identity (legacy behaviour);
     * ``RANK_NONE`` otherwise.
     """
     if not identity or not class_name:
         return RANK_NONE
-    key = _normalize_class_path(class_key(identity))
+    key = _normalize_class_path(class_fqn(identity))
     wanted = _normalize_class_path(class_name)
     simple = wanted.rsplit(".", 1)[-1]
-    if key == wanted:
-        return RANK_FQN
+    # Only a dotted (package-qualified) name can be an FQN match; a bare simple name
+    # must never rank 3, however the identity is shaped.
+    if "." in wanted:
+        if key == wanted or key.endswith("." + wanted):
+            return RANK_FQN
+        if any(_normalize_class_path(segment) == wanted
+               for segment in class_key(identity).split("|")
+               if not segment.lower().endswith(_ARCHIVE_SUFFIXES)):
+            return RANK_FQN
     if key.rsplit(".", 1)[-1] == simple:
         return RANK_SIMPLE
     if simple and simple in identity.lower():
@@ -158,7 +185,16 @@ def _candidate_lines(candidates: list[dict], limit: int = 20) -> str:
 
 
 def _class_names_of(candidates: list[dict]) -> list[str]:
-    return sorted({class_key(n.get("identity") or "").replace("|", ".") for n in candidates})
+    return sorted({class_fqn(n.get("identity")) for n in candidates})
+
+
+class MethodImpactSeedNotFound(Exception):
+    """LIN-870: the graph impact endpoint is deployed but does not know the selected node."""
+
+    def __init__(self, target_id, server_message: str):
+        super().__init__(server_message)
+        self.target_id = target_id
+        self.server_message = server_message
 
 
 # --- impact fetch (graph first, legacy fallback) ------------------------------
@@ -223,10 +259,18 @@ def fetch_impact(target_id: str, mv_id, depth: int) -> tuple[dict, dict]:
 
     Backend order: ``LINEAI_METHOD_IMPACT_BACKEND=legacy`` → legacy only;
     otherwise the graph impact endpoint (``direction=upstream``, ``depth``),
-    falling back to the legacy list when the graph endpoint answers 404
-    (not deployed, or the node is unknown to it). Transport / server errors
-    from the graph endpoint raise :class:`LineaiApiError` (rendered by the
-    dispatcher) — they are not silently retried on the unbounded legacy path.
+    falling back to the legacy list only when the graph **route** is missing
+    (404 without neo4cape's entity message). A 404 that names the node
+    ("Unable to locate node …") raises :class:`MethodImpactSeedNotFound` — the
+    legacy traversal from an unknown id returns an empty 200 that would read as
+    "isolated". Transport / server errors from the graph endpoint raise
+    :class:`LineaiApiError` (rendered by the dispatcher) — they are not
+    silently retried on the unbounded legacy path.
+
+    ``meta["depth"]`` / ``meta["direction"]`` report what the server actually
+    ran: a server without LIN-870 returns neither field (it ignores both and
+    runs the full both-direction subgraph), so they are recorded as unbounded
+    rather than echoing the request.
     """
     meta = {
         "source": "legacy",
@@ -248,6 +292,7 @@ def fetch_impact(target_id: str, mv_id, depth: int) -> tuple[dict, dict]:
             data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
             data = data if isinstance(data, dict) else {}
             assumptions = [str(a) for a in (data.get("assumptionsApplied") or [])]
+            bounded = "depth" in data  # LIN-870 server: echoes the depth/direction it ran
             meta.update({
                 "source": "graph",
                 "status": str(data.get("status") or "ok"),
@@ -255,15 +300,21 @@ def fetch_impact(target_id: str, mv_id, depth: int) -> tuple[dict, dict]:
                 "truncations": [a for a in assumptions if a.startswith("truncated_at_")],
                 "static_analysis_gap": bool(data.get("staticAnalysisGap")),
                 "node_count": data.get("nodeCount"),
-                "depth": data.get("depth", depth),
-                "direction": data.get("direction") or "upstream",
+                "depth": data.get("depth") if bounded else None,
+                "direction": (data.get("direction") or "upstream") if bounded
+                else "both (older server: depth and direction ignored, full subgraph)",
+                "bounded": bounded,
             })
             return graph_impact_to_impact_data(data), meta
+        if kind == "not_found":
+            # The route exists; the node does not (in this view). Never fall back: the legacy
+            # traversal from an unknown id answers an empty 200 that would read as "isolated".
+            raise MethodImpactSeedNotFound(target_id, snippet)
         if kind == "not_deployed":
             meta["fallback_reason"] = (
-                f"graph impact endpoint returned HTTP {status or 404} (not deployed on this server, or the node is unknown to it)"
+                f"graph impact endpoint returned HTTP {status or 404} (route not deployed on this server)"
             )
-            sys.stderr.write(f"Graph impact unavailable for {target_id} ({status}); falling back to legacy impact\n")
+            sys.stderr.write(f"Graph impact route unavailable for {target_id} ({status}); falling back to legacy impact\n")
         else:
             # via the module attribute so the live class is used even after a test-time reload
             raise lineai_utils.LineaiApiError(
@@ -278,8 +329,11 @@ def fetch_impact(target_id: str, mv_id, depth: int) -> tuple[dict, dict]:
 
 def _impact_scope_section(meta: dict, outcome: str, chosen_identity: str | None, overloads: list[str]) -> str:
     """The ``## Impact scope`` report block: source, completeness, server notes, class match."""
-    if meta["source"] == "graph":
+    if meta["source"] == "graph" and meta.get("bounded", True):
         source = f"graph (`POST {GRAPH_IMPACT_ENDPOINT}`, direction `{meta['direction']}`, depth {meta['depth']})"
+    elif meta["source"] == "graph":
+        source = (f"graph (`POST {GRAPH_IMPACT_ENDPOINT}`) on an OLDER server without LIN-870: `depth` and `direction` "
+                  "were ignored and the full both-direction subgraph was returned — not the bounded upstream probe this tool requests")
     else:
         source = f"legacy (`GET {LEGACY_IMPACT_ENDPOINT}`, full incoming chain)"
         if meta.get("fallback_reason"):
@@ -298,9 +352,14 @@ def _impact_scope_section(meta: dict, outcome: str, chosen_identity: str | None,
         lines.append(f"- **Static-analysis gap**: {gap}")
         if meta.get("node_count") is not None:
             lines.append(f"- **Nodes reached**: {meta['node_count']}")
-        notes = [a for a in meta["assumptions"] if not a.startswith("truncated_at_")]
+        notes = []
+        for marker in meta["assumptions"]:
+            if marker.startswith("truncated_at_"):
+                continue
+            # LIN-870: an older server's "ignored" markers read as prose, not as raw tokens
+            notes.append(_OLD_SERVER_MARKERS[marker] if marker in _OLD_SERVER_MARKERS else f"`{marker}`")
         if notes:
-            lines.append(f"- **Server notes**: {', '.join(f'`{a}`' for a in notes)}")
+            lines.append(f"- **Server notes**: {'; '.join(notes)}")
     match = {
         "single": "the only method with that short name",
         "overloads": "several signatures in one class — the first is analyzed",
@@ -441,7 +500,24 @@ The short name `{method_name}` matched in materialized view `{mv_id}`, but none 
     target_id = (node.get('properties') or {}).get('id') or node.get('id')
 
     start_time = time.time()
-    impact_data, impact_meta = fetch_impact(target_id, mv_id, depth)
+    try:
+        impact_data, impact_meta = fetch_impact(target_id, mv_id, depth)
+    except MethodImpactSeedNotFound as e:
+        return error_result(f"""# Unable to Analyze Method: `{method_name}`
+
+## Result
+The shortname search in materialized view `{mv_id}` returned `{chosen_identity}` (node `{target_id}`), but the graph impact endpoint does not know that node in the same view:
+
+```
+{e.server_message}
+```
+
+Nothing was analyzed: the legacy impact endpoint was NOT used as a fallback, because a traversal from an unknown node returns an empty result that would read as "no dependents". This is a search/view disagreement (the view may have been rebuilt between the two calls), not evidence that the method is isolated or not indexed.
+
+## Recommendations:
+1. Retry; if it repeats, rebuild the materialized view on the Lineai server.
+2. Or call `lineai-graph-search` for the class and `lineai-graph-impact` on the node id it returns now.
+""")
     end_time = time.time()
     duration = end_time - start_time
     log_timing(f"fetch_impact[{impact_meta['source']}] for node '{node.get('name')}'", duration)
@@ -625,7 +701,7 @@ The short name `{method_name}` matched in materialized view `{mv_id}`, but none 
 
 ## Summary
 - **Method**: `{method_name}`
-- **Class**: `{class_key(chosen_identity).replace('|', '.') if chosen_identity else (class_name or 'N/A')}`
+- **Class**: `{class_fqn(chosen_identity) if chosen_identity else (class_name or 'N/A')}`
 - **Materialized View**: `{mv_id}`
 """
 

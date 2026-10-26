@@ -167,8 +167,11 @@ sequenceDiagram
                         L-->>G: {status ok|partial, assumptionsApplied, truncated,<br/>nodeCount, staticAnalysisGap, nodes, relationships}
                         G-->>H: payload → cache
                         H->>H: graph_impact_to_impact_data + strip_unused_node_properties
-                    else 404 (not deployed / node unknown)
+                    else 404, route missing ("Resource not found" / no neo4cape envelope)
                         G-->>H: not_deployed → legacy fallback (reason recorded)
+                    else 404, node missing ("Unable to locate node …")
+                        G-->>H: not_found → MethodImpactSeedNotFound
+                        H-->>A: search/view disagreement page, isError=true (never legacy)
                     else timeout / 504 / other
                         G-->>H: kind → LineaiApiError(endpoint=/graph/impact) → dispatcher page
                     end
@@ -255,14 +258,14 @@ flowchart TD
     end
     MI --> MIK
     MI -. "auth raises" .-> API
-    MI --> MIG["fetch_impact (LIN-870):<br/>graph 404 → legacy fallback (recorded in Impact scope)<br/>graph timeout/504/other → LineaiApiError<br/>status partial → 'lower bound' wording"]
+    MI --> MIG["fetch_impact (LIN-870):<br/>graph 404 route-missing → legacy fallback (recorded in Impact scope)<br/>graph 404 node-missing → no-match page, never legacy<br/>graph timeout/504/other → LineaiApiError<br/>status partial → 'lower bound' wording<br/>no depth in payload → 'older server, unbounded' wording"]
     MIG -. "raises" .-> API
 
     DI --> DSE["search_database_entity → (results, error_kind):<br/>honest infra pages; no-match page names the<br/>resolved view; per-entity impact failures →<br/>'Impact retrieval failures' table"]
     DI -. "auth / get_impact raise" .-> API
 
     subgraph GTK["graph_request → error kind"]
-        G404["404 → <b>not_deployed</b><br/>'use method/database impact instead'"]
+        G404["404 route → <b>not_deployed</b><br/>'use method/database impact instead'<br/>404 entity envelope → <b>not_found</b><br/>'Graph node not found' (a graph fact)"]
         G504["504 → <b>gateway_timeout</b>"]
         GTO["timeout → <b>timeout</b>"]
         GJSON["2xx non-JSON → <b>invalid_json</b> (+ excerpt)"]

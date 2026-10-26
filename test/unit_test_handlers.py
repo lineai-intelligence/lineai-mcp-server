@@ -32,6 +32,7 @@ import lineai_mcp_server.utils as utils_module
 from lineai_mcp_server.utils import LineaiApiError
 from lineai_mcp_server.handlers import handle_call_tool, handle_list_tools
 from lineai_mcp_server.handlers.method_impact import (
+    class_fqn,
     class_key,
     class_match_rank,
     clamp_depth,
@@ -146,15 +147,17 @@ def _graph_partial():
 
 
 # The dogfood case behind LIN-870: `run()` on AnalyzeCommands exists in three agent repositories.
+# Identities use neo4cape's real Java shape: <archive>.jar|<File>.class|<fqn>|<signature>
+# (ClassFileAnalyzerUtil.getIdentityForMethodNode); 'alt-1' keeps the archive-less shape.
+SQL_RUN = 'cc-sql-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.sql.shell.AnalyzeCommands|run()'
+JAVA_RUN = 'cc-java-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.java.shell.AnalyzeCommands|run()'
+SRC_RUN = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|run()'
+SRC_RUN_STRING = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|run(String)'
 ANALYZE_COMMANDS_NODES = [
-    {'id': 'sql-1', 'name': 'run', 'identity': 'com.codelogic.agent.sql.shell|AnalyzeCommands|run()',
-     'properties': {'id': 'sql-1'}},
-    {'id': 'java-1', 'name': 'run', 'identity': 'com.codelogic.agent.java.shell|AnalyzeCommands|run()',
-     'properties': {'id': 'java-1'}},
-    {'id': 'src-1', 'name': 'run', 'identity': 'com.codelogic.agent.source.shell.shell|AnalyzeCommands|run()',
-     'properties': {'id': 'src-1'}},
-    {'id': 'src-2', 'name': 'run', 'identity': 'com.codelogic.agent.source.shell.shell|AnalyzeCommands|run(String)',
-     'properties': {'id': 'src-2'}},
+    {'id': 'sql-1', 'name': 'run', 'identity': SQL_RUN, 'properties': {'id': 'sql-1'}},
+    {'id': 'java-1', 'name': 'run', 'identity': JAVA_RUN, 'properties': {'id': 'java-1'}},
+    {'id': 'src-1', 'name': 'run', 'identity': SRC_RUN, 'properties': {'id': 'src-1'}},
+    {'id': 'src-2', 'name': 'run', 'identity': SRC_RUN_STRING, 'properties': {'id': 'src-2'}},
     {'id': 'alt-1', 'name': 'run', 'identity': 'com.acme.alt.AnalyzeCommands|run()',
      'properties': {'id': 'alt-1'}},
     json.loads(json.dumps(UR_NODE)),
@@ -349,7 +352,7 @@ class TestMethodImpactHandler(TestCase):
         mock_impact.assert_called_once_with('src-1', 'mv-1', direction='upstream', depth=3)
         self.assertIn('- **Class**: `com.codelogic.agent.source.shell.shell.AnalyzeCommands`', text)
         self.assertIn('several signatures in one class', text)
-        self.assertIn('- **Overloads in this class**: `com.codelogic.agent.source.shell.shell|AnalyzeCommands|run(String)`', text)
+        self.assertIn(f'- **Overloads in this class**: `{SRC_RUN_STRING}`', text)
 
     @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
@@ -380,7 +383,7 @@ class TestMethodImpactHandler(TestCase):
         self.assertTrue(result.isError)
         text = _text(result)
         self.assertIn('no match belongs to the class `com.elsewhere.AnalyzeCommands`', text)
-        self.assertIn('com.codelogic.agent.sql.shell|AnalyzeCommands|run()', text)
+        self.assertIn(SQL_RUN, text)
         self.assertIn('Do not report `com.elsewhere.AnalyzeCommands` as "not indexed"', text)
         mock_impact.assert_not_called()
 
@@ -460,6 +463,53 @@ class TestMethodImpactHandler(TestCase):
         self.assertEqual(ctx.exception.endpoint, '/api/ai-retrieval/graph/impact')
         mock_legacy.assert_not_called()
 
+    @patch('lineai_mcp_server.handlers.method_impact.get_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_graph_entity_404_is_a_no_match_page_not_a_legacy_fallback(self, mock_resolve, mock_nodes, mock_graph, mock_legacy):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        mock_graph.return_value = (None, 404, 'not_found', "Unable to locate node WITH id 'n-1'")
+
+        result = handle_method_impact({'method': 'doThing'})
+
+        self.assertIsInstance(result, types.CallToolResult)
+        self.assertTrue(result.isError)
+        text = _text(result)
+        self.assertIn("Unable to locate node WITH id 'n-1'", text)
+        self.assertIn('the legacy impact endpoint was NOT used as a fallback', text)
+        self.assertIn('not evidence that the method is isolated', text)
+        mock_legacy.assert_not_called()
+
+    @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
+    @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
+    @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
+    def test_older_server_without_depth_is_reported_as_unbounded(self, mock_resolve, mock_nodes, mock_impact):
+        mock_resolve.return_value = 'mv-1'
+        mock_nodes.return_value = (WIDGET_ONLY, None)
+        # pre-LIN-870 GraphMcpImpactResponse: no depth/direction fields, reserved markers
+        old = {
+            'status': 'ok',
+            'assumptionsApplied': [
+                'direction_parameter_reserved_uses_full_impact_subgraph',
+                'depth_parameter_reserved_uses_full_impact_subgraph',
+            ],
+            'nodeCount': 2,
+            'staticAnalysisGap': False,
+            'nodes': IMPACT_DATA['data']['nodes'],
+            'relationships': IMPACT_DATA['data']['relationships'],
+        }
+        mock_impact.return_value = _graph_ok(old)
+
+        text = _text(handle_method_impact({'method': 'doThing', 'depth': 2}))
+
+        self.assertIn('on an OLDER server without LIN-870: `depth` and `direction` were ignored', text)
+        self.assertNotIn('direction `upstream`, depth 2', text)
+        self.assertNotIn('depth 3)', text)
+        self.assertIn('- **Server notes**: `direction` was ignored (older server: full impact subgraph); `depth` was ignored (older server: full impact subgraph)', text)
+        self.assertNotIn('`depth_parameter_reserved_uses_full_impact_subgraph`', text)
+
     @patch('lineai_mcp_server.handlers.method_impact.get_graph_impact')
     @patch('lineai_mcp_server.handlers.method_impact.get_method_nodes')
     @patch('lineai_mcp_server.handlers.method_impact.resolve_mv_id')
@@ -489,6 +539,32 @@ class TestMethodNodeSelection(unittest.TestCase):
         self.assertEqual(class_key('com.acme.Widget|doThing(String)'), 'com.acme.Widget')
         self.assertEqual(class_key('nothing-here'), 'nothing-here')
         self.assertEqual(class_key(None), '')
+
+    def test_class_fqn_drops_archive_and_class_file_segments(self):
+        self.assertEqual(class_fqn(SRC_RUN), 'com.codelogic.agent.source.shell.shell.AnalyzeCommands')
+        self.assertEqual(class_fqn('com.acme|Widget|doThing()'), 'com.acme.Widget')
+        self.assertEqual(class_fqn('com.acme.alt.AnalyzeCommands|run()'), 'com.acme.alt.AnalyzeCommands')
+        self.assertEqual(class_fqn('app.war|lib/x.jar|Outer$Inner.class|com.acme.Outer$Inner|m()'), 'com.acme.Outer$Inner')
+        self.assertEqual(class_fqn(None), '')
+
+    def test_class_match_rank_real_identity_shape(self):
+        """The ticket's case: the identity carries the archive and .class prefix (review on PR #63)."""
+        fqn = 'com.codelogic.agent.source.shell.shell.AnalyzeCommands'
+        real = 'codelogic-source-agent-1.0.jar|AnalyzeCommands.class|com.codelogic.agent.source.shell.shell.AnalyzeCommands|analyze()'
+        self.assertEqual(class_match_rank(real, fqn), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, fqn), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, fqn.upper()), 3)
+        self.assertEqual(class_match_rank(SQL_RUN, fqn), 2)      # same simple name, other repository
+        self.assertEqual(class_match_rank(JAVA_RUN, 'com.codelogic.agent.java.shell.AnalyzeCommands'), 3)
+        self.assertEqual(class_match_rank(SRC_RUN, 'AnalyzeCommands'), 2)
+        self.assertEqual(class_match_rank(SRC_RUN, 'Commands'), 1)
+        # inner classes in the real shape
+        inner = 'x-1.0.jar|Outer$Inner.class|com.acme.Outer$Inner|m()'
+        self.assertEqual(class_match_rank(inner, 'com.acme.Outer.Inner'), 3)
+        self.assertEqual(class_match_rank(inner, 'com.acme.Outer$Inner'), 3)
+        # the archive name must never satisfy the FQN (it is dotted, so it exercises the FQN rules)
+        self.assertLess(class_match_rank(SRC_RUN, 'codelogic-source-agent-1.0.jar'), 3)
+        self.assertLess(class_match_rank(SRC_RUN, 'AnalyzeCommands.class'), 3)
 
     def test_class_match_rank_table(self):
         src = 'com.codelogic.agent.source.shell.shell|AnalyzeCommands|run()'

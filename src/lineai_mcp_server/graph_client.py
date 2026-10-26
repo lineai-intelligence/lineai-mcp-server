@@ -23,7 +23,7 @@ import httpx
 from . import utils
 
 GraphErrorKind = Optional[
-    Literal["not_deployed", "timeout", "gateway_timeout", "http_error", "invalid_json"]
+    Literal["not_deployed", "not_found", "timeout", "gateway_timeout", "http_error", "invalid_json"]
 ]
 
 # Same path layout as existing ai-retrieval usage in utils.py
@@ -34,11 +34,39 @@ _GRAPH_REL_PREFIX = "/api/ai-retrieval/graph"
 _graph_impact_cache: dict[str, tuple[tuple[Any | None, int, GraphErrorKind, str], datetime]] = {}
 
 
+def _entity_not_found_message(text: str) -> str | None:
+    """
+    LIN-870: neo4cape answers **two** kinds of 404 with the same envelope
+    (``{"error": {"code": "NOT_FOUND", "message": ...}}``): a missing route
+    (``"Resource not found /api/..."``, from its ``NoResourceFoundException``
+    handler) and a missing entity (``"Unable to locate node WITH id '...'"``,
+    a ``CodeLogicEntityNotFoundException``). Only the second is a statement
+    about the graph. Returns the server message for an entity 404, else None
+    (missing route, Spring's default body, a gateway's HTML page).
+    """
+    try:
+        body = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = str(error.get("message") or "")
+    if not message or message.startswith("Resource not found"):
+        return None
+    return message
+
+
 def _graph_response_tuple(response: httpx.Response) -> tuple[Any | None, int, GraphErrorKind, str]:
     text = response.text or ""
     snippet = text[:2000] if text else ""
     code = response.status_code
     if code == 404:
+        entity_message = _entity_not_found_message(text)
+        if entity_message is not None:
+            return None, 404, "not_found", entity_message
         return None, 404, "not_deployed", snippet
     if code == 504:
         return None, 504, "gateway_timeout", snippet
@@ -186,6 +214,22 @@ def graph_error_message(
 ) -> str:
     if kind == "not_deployed":
         return graph_not_deployed_message(tool_name, path_suffix, status_code or 404, snippet)
+    if kind == "not_found":
+        return f"""# Graph node not found: `{tool_name}`
+
+The Lineai graph API is deployed, but the server could not find a node this request named (`{path_suffix}`, HTTP 404):
+
+```
+{snippet[:1500]}
+```
+
+This is a statement about the graph, not an infrastructure problem: the node id is not in the requested materialized view (the view may have been rebuilt since the id was obtained, or the id belongs to another view).
+
+## What to do
+
+1. Re-run `lineai-graph-search` to obtain a current node id in the same `workspace` / `materialized_view_id`.
+2. Check that the `materialized_view_id` matches the one the id came from.
+"""
     if kind == "timeout":
         return f"""# Graph request timed out: `{tool_name}`
 

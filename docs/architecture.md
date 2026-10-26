@@ -174,15 +174,25 @@ Pipeline (endpoints in call order):
    `truncated`, `nodeCount`, `staticAnalysisGap`, `nodes`, `relationships`) is
    mapped by `graph_impact_to_impact_data` into the legacy
    `{"data": {"nodes", "relationships"}}` shape and stripped by
-   `strip_unused_node_properties`. A graph **404** (`not_deployed` — the endpoint
-   is missing or the node is unknown to it) or `LINEAI_METHOD_IMPACT_BACKEND=legacy`
-   falls back to `get_impact(target_id, mv_id)`:
+   `strip_unused_node_properties`. A graph **404 for the route** (`not_deployed`:
+   neo4cape's `"Resource not found …"` envelope, Spring's default body, or a
+   gateway page) or `LINEAI_METHOD_IMPACT_BACKEND=legacy` falls back to
+   `get_impact(target_id, mv_id)`:
    `GET /api/dependency/impact/full/{id}/list?viewId={mv_id}` (unbounded full
    incoming chain, `strip_unused_properties`, cached per `{id}:{mv_id}`). Graph
    timeouts / 504s / other errors raise a typed `LineaiApiError` (§7) instead of
-   silently retrying on the unbounded path. `fetch_impact` also returns a `meta`
-   dict (source, status, truncation markers, static-analysis gap, node count,
-   depth/direction, fallback reason).
+   silently retrying on the unbounded path. A **404 that names the node**
+   (`not_found`: neo4cape's `"Unable to locate node WITH id …"` envelope — the
+   route exists, the node is not in that view) raises `MethodImpactSeedNotFound`
+   and renders a search/view-disagreement page; it never falls back, because the
+   legacy traversal from an unknown id answers an empty 200 that would read as
+   "isolated". `fetch_impact` also returns a `meta` dict (source, status,
+   truncation markers, static-analysis gap, node count, depth/direction,
+   fallback reason, `bounded`). `bounded` is false when the payload has no
+   `depth` field — a server without LIN-870 ignored `depth`/`direction` and ran
+   the full both-direction subgraph — and the Impact-scope block then says so
+   instead of echoing the requested depth; the `*_reserved_*` markers are
+   rendered as prose via `graph_tools._OLD_SERVER_MARKERS`.
 5. **Report assembly** — extracts nodes/relationships, finds the target method node
    (preferring one with `statistics.cyclomaticComplexity`), code owners/reviewers
    (`lineai.owners` / `lineai.reviewers`, falling back to the containing class
@@ -407,8 +417,11 @@ gets a well-formed answer, never a protocol error.
 ### 7.2 Graph error kinds — `graph_client.py`
 
 The graph path has a parallel taxonomy, computed from the response rather than
-exceptions where possible: `not_deployed` (404 — "graph endpoints not deployed on
-this host; use lineai-method-impact / lineai-database-impact instead"),
+exceptions where possible: `not_deployed` (404 **for the route** — "graph endpoints
+not deployed on this host; use lineai-method-impact / lineai-database-impact
+instead"), `not_found` (404 **for an entity** — neo4cape's envelope with a message
+other than "Resource not found …", e.g. "Unable to locate node WITH id …";
+rendered as "Graph node not found", a statement about the graph, since LIN-870),
 `gateway_timeout` (504), `http_error` (other ≥400, or transport error, or unset
 `LINEAI_SERVER_HOST`, or unsupported method), `timeout`, and `invalid_json`
 (2xx body that fails to parse; the message includes a ≤1500-char excerpt).
@@ -419,7 +432,7 @@ renders each kind as Markdown with the failing path and status, returned with
 `isError=True`. The timeout / 504 pages (and `render_lineai_api_error`'s) add
 "retry with a smaller `depth` (1–2) or a single seed" since LIN-870. When
 `lineai-method-impact` uses the graph backend (§4.1 step 4), `not_deployed`
-triggers the legacy fallback and the other kinds are re-raised as
+triggers the legacy fallback, `not_found` renders the no-match page, and the other kinds are re-raised as
 `LineaiApiError` (`invalid_json` → `invalid_response`) with
 `endpoint=/api/ai-retrieval/graph/impact`.
 
@@ -476,7 +489,7 @@ Every variable actually read by the code:
 | `LINEAI_MV_CACHE_TTL` | `300` (s) | `utils.py` | Materialized-view resolution cache lifetime (workspace name / server default → view id; new in PR #61) |
 | `LINEAI_REQUEST_TIMEOUT` | `120.0` (s) | `utils.py` (+ echoed in error text) | Overall httpx request timeout for every API call |
 | `LINEAI_CONNECT_TIMEOUT` | `30.0` (s) | `utils.py` | httpx connect timeout |
-| `LINEAI_METHOD_IMPACT_BACKEND` | `graph` | `handlers/method_impact.py` (per call) | `graph`: bounded graph impact endpoint with legacy fallback on 404; `legacy`: always the unbounded `/api/dependency/impact/full` list (LIN-870) |
+| `LINEAI_METHOD_IMPACT_BACKEND` | `graph` | `handlers/method_impact.py` (per call) | `graph`: bounded graph impact endpoint with legacy fallback on a route-missing 404 (an entity 404 is a no-match page); `legacy`: always the unbounded `/api/dependency/impact/full` list (LIN-870) |
 | `LINEAI_TEST_MODE` | unset | `server.py`, `test/` | Any value skips `load_dotenv()` so tests fully control the environment |
 | `LINEAI_GRAPH_E2E_REQUIRED` | unset | `test/integration_test_graph.py` only | `1` turns "graph routes return 404" from test *skip* into test *failure* |
 
